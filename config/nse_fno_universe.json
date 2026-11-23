@@ -1,1 +1,26 @@
-{"version":"EMPTY_BOOTSTRAP_REQUIRED","refreshed_at":null,"instruments":[]}
+{
+  "version": "INDEX_ONLY_BOOTSTRAP_2026-11-23",
+  "refreshed_at": "2026-11-23T00:00:00Z",
+  "source": "Upstox documented NSE index instrument keys; temporary index-only bootstrap. Add only NSE-confirmed current F&O underlyings after review.",
+  "count": 2,
+  "instruments": [
+    {
+      "instrument_key": "NSE_INDEX|Nifty 50",
+      "symbol": "NIFTY",
+      "name": "NIFTY 50",
+      "segment": "NSE_INDEX",
+      "instrument_type": "INDEX",
+      "lot_size": null,
+      "exchange_token": null
+    },
+    {
+      "instrument_key": "NSE_INDEX|Nifty Bank",
+      "symbol": "BANKNIFTY",
+      "name": "NIFTY BANK",
+      "segment": "NSE_INDEX",
+      "instrument_type": "INDEX",
+      "lot_size": null,
+      "exchange_token": null
+    }
+  ]
+}
