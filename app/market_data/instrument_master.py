@@ -4,7 +4,7 @@ from datetime import datetime,timezone
 class InstrumentMaster:
     @staticmethod
     def parse(raw):
-        if raw[:2]==b'\\x1f\\x8b': raw=gzip.decompress(raw)
+        if raw[:2]==b'\x1f\x8b': raw=gzip.decompress(raw)
         obj=json.loads(raw.decode('utf-8'))
         return obj if isinstance(obj,list) else obj.get('data',[])
     def build_snapshot(self,raw,output,eligible_symbols):
