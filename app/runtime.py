@@ -85,13 +85,14 @@ class LiveRuntime:
                     for row in reversed(candles):
                         ts=datetime.fromisoformat(row[0]); parsed.append(Candle(key,ts,ts+__import__('datetime').timedelta(minutes=5),float(row[1]),float(row[2]),float(row[3]),float(row[4]),float(row[5]),'historical'))
                     self.hist[key]=parsed[-500:]
-                    daily=await self.client.historical_candles(key,'days',1,end.isoformat(),(end-timedelta(days=12)).isoformat())
-                    drows=daily.get('data',{}).get('candles',[])
-                    if drows: self.day_refs[key]={'previous_close':float(drows[0][4])}
-                    # If booted after regular open, use Upstox's actual 09:15 intraday candle,
-                    # never the pre-open indicative equilibrium price.
+                    # The final completed 5m candle in the historical response is the
+                    # prior session close; avoid a separate daily endpoint call per symbol.
+                    if parsed:
+                        self.day_refs[key]={'previous_close':float(parsed[-1].close)}
+                    # Fetch the true 09:15 regular-session open only while the market is
+                    # open. Outside market hours ORB remains safely disabled until next day.
                     current=datetime.now(ZoneInfo(self.settings.timezone))
-                    if current.time()>=__import__('datetime').time(9,15):
+                    if __import__('datetime').time(9,15) <= current.time() <= __import__('datetime').time(15,30):
                         intra=await self.client.intraday_candles(key,'minutes',1)
                         today_rows=intra.get('data',{}).get('candles',[])
                         for bar in sorted(today_rows,key=lambda x:x[0]):
