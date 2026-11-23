@@ -111,7 +111,7 @@ class LiveRuntime:
         rows=self.hist[c.instrument_key]
         await self._manage_trades(c, rows)
         if len(rows)<25:return
-        df=pd.DataFrame([{'open':x.open,'high':x.high,'low':x.low,'close':x.close,'volume':x.volume} for x in rows],index=pd.DatetimeIndex([x.start for x in rows]))
+        df=pd.DataFrame([{'open':x.open,'high':x.high,'low':x.low,'close':x.close,'volume':x.volume} for x in rows],index=pd.DatetimeIndex(pd.to_datetime([x.start for x in rows],utc=True)))
         inst=next((x for x in self.universe.instruments if x['instrument_key']==c.instrument_key),None)
         if not inst:return
         symbol=inst['symbol']; now=c.end
