@@ -1,0 +1,2 @@
+# Paste one NSE cash-market symbol per line from the reviewed current NSE F&O underlying list.
+# Do not include futures/options contract symbols. Refresh only by an explicit manual review.

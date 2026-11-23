@@ -1,0 +1,19 @@
+strategies:
+  enabled: [ORB_GAP, MOMENTUM_EXPLOSION]
+orb:
+  range_minutes: 15
+  entry_cutoff: "11:30"
+  min_gap_pct: 1.0
+momentum:
+  entry_cutoff: "15:00"
+  cooldown_minutes: 30
+  relative_volume_threshold: 1.5
+  atr_expansion_threshold: 1.2
+  structure_lookback: 10
+  atr_period: 14
+  ema_fast: 9
+  ema_slow: 21
+risk:
+  tp1_r: 1.0
+  tp2_r: 2.0
+  atr_buffer: 0.2
