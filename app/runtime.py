@@ -49,7 +49,8 @@ class LiveRuntime:
         for t in self.tasks:t.cancel()
         if self.tasks: await asyncio.gather(*self.tasks,return_exceptions=True)
         await self.shadow_actors.stop()
-        log.info('Shadow actor summary: %s',self.shadow_actors.snapshot())
+        shadow_summary=self.shadow_actors.snapshot(); shadow_summary.pop('actors',None)
+        log.info('Shadow actor summary: %s',shadow_summary)
         if self.client: await self.client.close()
     async def on_tick(self,tick):
         # Non-blocking, bounded shadow fan-out. Signal processing below is unchanged.
