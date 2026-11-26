@@ -158,6 +158,7 @@ def test_replay_requires_missing_upcaster_and_rejects_newer_schema(session):
             aggregate_type="account",
             aggregate_id="A-1",
             reducers={"ValueSet": reducer},
+            upcasters={("ValueSet", 1): lambda payload: payload},
             target_version=2,
             target_schema_versions={"ValueSet": 2},
         )
