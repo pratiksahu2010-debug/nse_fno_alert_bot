@@ -4,6 +4,8 @@ These actors intentionally do not evaluate strategies, persist signals, manage
 trades, or send alerts. The existing LiveRuntime remains authoritative.
 """
 import asyncio
+from datetime import datetime
+import math
 
 
 _STOP = object()
@@ -23,6 +25,23 @@ class SymbolActor:
         self.last_timestamp = None
         self.last_price = None
         self.task = None
+
+    def restore_checkpoint(self, checkpoint):
+        """Restore validated observation-only state before the actor starts."""
+        if self.task is not None or not self.mailbox.empty():
+            raise RuntimeError("checkpoint restore requires an idle, unstarted actor")
+        timestamp = checkpoint.get("last_timestamp")
+        price = checkpoint.get("last_price")
+        processed = checkpoint.get("processed", 0)
+        if not isinstance(timestamp, datetime) or timestamp.tzinfo is None:
+            raise ValueError("checkpoint timestamp must be timezone-aware")
+        if isinstance(price, bool) or not isinstance(price, (int, float)) or not math.isfinite(float(price)) or float(price) <= 0:
+            raise ValueError("checkpoint price must be finite and positive")
+        if type(processed) is not int or processed < 0:
+            raise ValueError("checkpoint processed count must be non-negative")
+        self.last_timestamp = timestamp
+        self.last_price = float(price)
+        self.processed = processed
 
     def start(self):
         if self.task is None:
@@ -94,6 +113,7 @@ class SymbolActor:
             "last_timestamp": (
                 self.last_timestamp.isoformat() if self.last_timestamp else None
             ),
+            "last_price": self.last_price,
         }
 
 
@@ -103,14 +123,49 @@ class ShadowActorRegistry:
     def __init__(self, mailbox_size=256, max_symbols=1000):
         if max_symbols < 1:
             raise ValueError("max_symbols must be positive")
+        if mailbox_size < 1:
+            raise ValueError("mailbox_size must be positive")
         self.mailbox_size = mailbox_size
         self.max_symbols = max_symbols
         self.actors = {}
         self.accepting = False
         self.rejected_symbols = 0
 
+    def restore_checkpoints(self, checkpoints):
+        """Atomically seed actors before they start consuming ticks."""
+        if self.accepting:
+            raise RuntimeError("cannot restore checkpoints after registry start")
+        if not isinstance(checkpoints, dict):
+            raise TypeError("checkpoints must be a dictionary")
+        if self.actors:
+            raise RuntimeError("checkpoint restore requires an empty registry")
+        if len(checkpoints) > self.max_symbols:
+            raise ValueError("checkpoint set exceeds actor registry capacity")
+        # Validate every checkpoint before creating any actor.
+        for key, value in checkpoints.items():
+            if not isinstance(key, str) or not key.strip() or not isinstance(value, dict):
+                raise ValueError("invalid actor checkpoint entry")
+            timestamp = value.get("last_timestamp")
+            price = value.get("last_price")
+            processed = value.get("processed", 0)
+            if not isinstance(timestamp, datetime) or timestamp.tzinfo is None:
+                raise ValueError("checkpoint timestamp must be timezone-aware")
+            if isinstance(price, bool) or not isinstance(price, (int, float)) or not math.isfinite(float(price)) or float(price) <= 0:
+                raise ValueError("checkpoint price must be finite and positive")
+            if type(processed) is not int or processed < 0:
+                raise ValueError("checkpoint processed count must be non-negative")
+        restored = {}
+        for key, value in checkpoints.items():
+            actor = SymbolActor(key, self.mailbox_size)
+            actor.restore_checkpoint(value)
+            restored[key] = actor
+        self.actors.update(restored)
+        return len(restored)
+
     def start(self):
         self.accepting = True
+        for actor in self.actors.values():
+            actor.start()
 
     def submit(self, tick):
         if not self.accepting:
