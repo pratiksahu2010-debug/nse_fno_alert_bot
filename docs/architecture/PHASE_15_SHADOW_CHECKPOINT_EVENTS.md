@@ -22,7 +22,8 @@ in `LiveRuntime` or application startup.
 
 ## Bounded asynchronous behavior
 
-- Actor callbacks call only the producer's non-blocking `submit()`; no database
+- Actor callbacks are rate-limited before snapshot serialization (30 seconds by
+  default) and call only the producer's non-blocking `submit()`; no database
   operation occurs on the actor consumer.
 - A bounded queue holds at most one pending key per instrument. Repeated
   updates for a queued instrument coalesce to the latest checkpoint.
