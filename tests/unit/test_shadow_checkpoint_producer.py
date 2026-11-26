@@ -132,6 +132,29 @@ def test_shadow_actor_registry_can_feed_optional_checkpoint_sink(tmp_path):
     engine.dispose()
 
 
+def test_new_producer_loads_existing_version_and_first_submit_is_not_throttled(tmp_path):
+    engine, factory = make_factory(tmp_path)
+
+    async def scenario():
+        first = ShadowCheckpointProducer(factory, min_interval_seconds=60)
+        first.start()
+        assert first.submit(snapshot(price=100, processed=1))
+        assert await first.flush()
+        assert await first.stop()
+
+        restarted = ShadowCheckpointProducer(factory, min_interval_seconds=60)
+        restarted.start()
+        assert restarted.submit(snapshot(price=101, processed=2))
+        assert await restarted.flush()
+        assert await restarted.stop()
+
+    asyncio.run(scenario())
+    rows = read_events(factory, "NSE_FO|NIFTY")
+    assert [row.aggregate_version for row in rows] == [1, 2]
+    assert rows[-1].payload["last_price"] == 101.0
+    engine.dispose()
+
+
 def test_invalid_checkpoint_is_rejected_before_queueing(tmp_path):
     engine, factory = make_factory(tmp_path)
 
