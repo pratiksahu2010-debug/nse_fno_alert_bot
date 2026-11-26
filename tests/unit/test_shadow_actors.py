@@ -143,3 +143,26 @@ def test_registry_reports_actor_drain_timeout():
         assert actor.task is None
 
     asyncio.run(scenario())
+
+
+
+def test_actor_shutdown_cleans_up_failed_consumer():
+    from app.actors.shadow_runtime import SymbolActor
+
+    async def scenario():
+        actor = SymbolActor("X")
+
+        async def failed_consumer():
+            await actor.mailbox.get()
+            raise RuntimeError("consumer_failed")
+
+        actor._run = failed_consumer
+        actor.start()
+        assert actor.submit(make_tick("X")) is True
+        await asyncio.sleep(0)
+
+        assert await actor.stop(timeout=1.0) is True
+        assert actor.task is None
+        assert actor.mailbox.empty()
+
+    asyncio.run(scenario())
