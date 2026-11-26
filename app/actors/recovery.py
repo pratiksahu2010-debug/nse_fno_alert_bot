@@ -117,7 +117,7 @@ class ShadowRecoveryCoordinator:
         if any(not isinstance(key, str) or not key.strip() for key in keys):
             raise ValueError("instrument keys must be non-empty strings")
         async with self._lock:
-            if self.state in (RecoveryLifecycle.STOPPING, RecoveryLifecycle.STOPPED):
+            if self.state in (RecoveryLifecycle.STOPPING, RecoveryLifecycle.STOPPED, RecoveryLifecycle.FAILED):
                 self.state = RecoveryLifecycle.STARTING
             elif self.state == RecoveryLifecycle.READY:
                 return ShadowRecoveryReport(self.state, 0, len(keys), ("already recovered",))
