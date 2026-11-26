@@ -22,13 +22,29 @@ class FakeEngine:
         return False
 
 
+class FakeUniverse:
+    instruments = ["X"]
+    version = "TEST"
+
+    def __init__(self, valid=True):
+        self.valid = valid
+
+    def validate(self):
+        if not self.valid:
+            raise ValueError("incomplete F&O universe")
+        return True
+
+
+class FakeFeed:
+    def __init__(self, connected=True):
+        self.connected = connected
+
+
 class FakeRuntime:
-    def __init__(self, connected=True, running=True, instruments=None):
+    def __init__(self, connected=True, running=True, universe_valid=True):
         self.running = running
-        self.ws = type("Feed", (), {"connected": connected})()
-        self.universe = type(
-            "Universe", (), {"instruments": instruments if instruments is not None else ["X"]}
-        )()
+        self.ws = FakeFeed(connected)
+        self.universe = FakeUniverse(universe_valid)
 
 
 def test_readiness_passes_when_all_required_dependencies_are_ready():
@@ -40,7 +56,7 @@ def test_readiness_passes_when_all_required_dependencies_are_ready():
         "database": True,
         "runtime": True,
         "initialization_complete": True,
-        "universe_loaded": True,
+        "universe_valid": True,
         "feed_connected": True,
     }
     assert result["alert_only"] is True
@@ -71,9 +87,19 @@ def test_readiness_fails_during_initialization_or_after_startup_error():
 
 def test_readiness_fails_when_database_or_universe_is_unavailable():
     no_database = readiness_snapshot(FakeEngine(fails=True), FakeRuntime())
-    no_universe = readiness_snapshot(FakeEngine(), FakeRuntime(instruments=[]))
+    no_universe = readiness_snapshot(
+        FakeEngine(), FakeRuntime(universe_valid=False)
+    )
 
     assert no_database["ready"] is False
     assert "database" in no_database["not_ready_reasons"]
     assert no_universe["ready"] is False
-    assert "universe_loaded" in no_universe["not_ready_reasons"]
+    assert "universe_valid" in no_universe["not_ready_reasons"]
+    assert no_universe["universe_error"] == "incomplete F&O universe"
+
+
+def test_readiness_fails_when_runtime_is_not_running():
+    result = readiness_snapshot(FakeEngine(), FakeRuntime(running=False))
+
+    assert result["ready"] is False
+    assert "runtime" in result["not_ready_reasons"]
