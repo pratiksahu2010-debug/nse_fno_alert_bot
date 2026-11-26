@@ -66,7 +66,12 @@ def test_recovers_verified_event_state_without_starting_actor_tasks(session_fact
     registry = ShadowActorRegistry(mailbox_size=8, max_symbols=2)
     recovery = coordinator(session_factory, registry)
 
-    report = asyncio.run(recovery.recover([key]))
+    async def recover_and_stop():
+        report = await recovery.recover([key])
+        stopped = await recovery.stop()
+        return report, stopped
+
+    report, stopped = asyncio.run(recover_and_stop())
 
     assert report.state == RecoveryLifecycle.READY
     assert report.restored == 1
@@ -75,7 +80,7 @@ def test_recovers_verified_event_state_without_starting_actor_tasks(session_fact
     assert actor.last_timestamp.isoformat() == stamp
     assert actor.last_price == 24100.5
     assert actor.processed == 17
-    assert asyncio.run(recovery.stop()) is True
+    assert stopped is True
     assert recovery.state == RecoveryLifecycle.STOPPED
 
 
