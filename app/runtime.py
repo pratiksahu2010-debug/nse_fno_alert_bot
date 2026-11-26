@@ -40,7 +40,7 @@ class LiveRuntime:
         self.client=UpstoxClient(self.settings.upstox_access_token)
         self.running=True
         self.shadow_actors.start()
-        self.ws=WebsocketManager(self.client,[x['instrument_key'] for x in self.universe.instruments],decode_market_data,self.on_tick,stale_seconds=self.settings.websocket_stale_seconds,on_connect=self._repair_after_reconnect)
+        self.ws=WebsocketManager(self.client,[x['instrument_key'] for x in self.universe.instruments],decode_market_data,self.on_tick,stale_seconds=self.settings.websocket_stale_seconds,before_connect=self._repair_after_reconnect)
         await self._warmup()
         self._restore_module_state()
         self.tasks=[asyncio.create_task(self.ws.run(),name='upstox-v3-feed'),asyncio.create_task(DeliveryWorker(self.Session,self.settings).run(),name='telegram-outbox')]

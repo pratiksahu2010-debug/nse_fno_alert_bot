@@ -29,7 +29,7 @@ class FakeConnect:
 
 
 @pytest.mark.asyncio
-async def test_reconnect_callback_runs_before_subscription(monkeypatch):
+async def test_reconnect_callback_runs_before_socket_authorization_and_subscription(monkeypatch):
     events = []
     async def repair():
         events.append("repair")
@@ -38,16 +38,19 @@ async def test_reconnect_callback_runs_before_subscription(monkeypatch):
         keys=["NSE_EQ|X"],
         decoder=lambda payload: [],
         on_tick=lambda tick: None,
-        on_connect=repair,
+        before_connect=repair,
     )
     manager.running = True
     async def authorize():
         return {"data": {"authorized_redirect_uri": "wss://example.invalid"}}
-    manager.client = SimpleNamespace(authorize_market_feed=authorize)
+    async def authorize_with_event():
+        events.append('authorize')
+        return await authorize()
+    manager.client = SimpleNamespace(authorize_market_feed=authorize_with_event)
     socket = FakeSocket(events, manager)
     monkeypatch.setattr(
         "app.market_data.websocket_manager.websockets.connect",
         lambda *a, **k: FakeConnect(socket),
     )
     await manager.run()
-    assert events[:2] == ["repair", "subscribe"]
+    assert events[:3] == ["repair", "authorize", "subscribe"]
