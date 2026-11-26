@@ -8,3 +8,7 @@ CREATE TABLE IF NOT EXISTS aggregate_snapshot_checksums (
     CONSTRAINT ck_snapshot_checksum_length
         CHECK (checksum = '' OR length(checksum) = 64)
 );
+INSERT INTO aggregate_snapshot_checksums (snapshot_id, checksum)
+SELECT snapshot_id, ''
+FROM aggregate_snapshots
+ON CONFLICT (snapshot_id) DO NOTHING;
