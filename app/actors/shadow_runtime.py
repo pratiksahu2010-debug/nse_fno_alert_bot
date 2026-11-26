@@ -6,13 +6,14 @@ trades, or send alerts. The existing LiveRuntime remains authoritative.
 import asyncio
 from datetime import datetime
 import math
+from time import monotonic
 
 
 _STOP = object()
 
 
 class SymbolActor:
-    def __init__(self, instrument_key, mailbox_size=256, checkpoint_sink=None):
+    def __init__(self, instrument_key, mailbox_size=256, checkpoint_sink=None, checkpoint_interval_seconds=30.0):
         if mailbox_size < 1:
             raise ValueError("mailbox_size must be positive")
         self.instrument_key = instrument_key
@@ -25,7 +26,11 @@ class SymbolActor:
         self.last_timestamp = None
         self.last_price = None
         self.task = None
+        if checkpoint_interval_seconds < 0:
+            raise ValueError("checkpoint_interval_seconds cannot be negative")
         self.checkpoint_sink = checkpoint_sink
+        self.checkpoint_interval_seconds = float(checkpoint_interval_seconds)
+        self._last_checkpoint_at = None
 
     def restore_checkpoint(self, checkpoint):
         """Restore validated observation-only state before the actor starts."""
@@ -74,11 +79,17 @@ class SymbolActor:
                     self.last_price = float(item.price)
                     self.processed += 1
                     if self.checkpoint_sink is not None:
-                        try:
-                            self.checkpoint_sink(self.snapshot())
-                        except Exception as exc:
-                            self.failed += 1
-                            self.last_error = type(exc).__name__
+                        now = monotonic()
+                        if (
+                            self._last_checkpoint_at is None
+                            or now - self._last_checkpoint_at >= self.checkpoint_interval_seconds
+                        ):
+                            self._last_checkpoint_at = now
+                            try:
+                                self.checkpoint_sink(self.snapshot())
+                            except Exception as exc:
+                                self.failed += 1
+                                self.last_error = type(exc).__name__
                 except Exception as exc:
                     # A malformed shadow observation must not kill the actor
                     # or interfere with the authoritative market-data path.
@@ -127,7 +138,7 @@ class SymbolActor:
 class ShadowActorRegistry:
     """Owns lazily-created symbol actors and enforces global actor bounds."""
 
-    def __init__(self, mailbox_size=256, max_symbols=1000, checkpoint_sink=None):
+    def __init__(self, mailbox_size=256, max_symbols=1000, checkpoint_sink=None, checkpoint_interval_seconds=30.0):
         if max_symbols < 1:
             raise ValueError("max_symbols must be positive")
         if mailbox_size < 1:
@@ -137,7 +148,10 @@ class ShadowActorRegistry:
         self.actors = {}
         self.accepting = False
         self.rejected_symbols = 0
+        if checkpoint_interval_seconds < 0:
+            raise ValueError("checkpoint_interval_seconds cannot be negative")
         self.checkpoint_sink = checkpoint_sink
+        self.checkpoint_interval_seconds = float(checkpoint_interval_seconds)
 
     def restore_checkpoints(self, checkpoints):
         """Atomically seed actors before they start consuming ticks."""
@@ -164,7 +178,7 @@ class ShadowActorRegistry:
                 raise ValueError("checkpoint processed count must be non-negative")
         restored = {}
         for key, value in checkpoints.items():
-            actor = SymbolActor(key, self.mailbox_size, self.checkpoint_sink)
+            actor = SymbolActor(key, self.mailbox_size, self.checkpoint_sink, self.checkpoint_interval_seconds)
             actor.restore_checkpoint(value)
             restored[key] = actor
         self.actors.update(restored)
@@ -183,7 +197,7 @@ class ShadowActorRegistry:
             if len(self.actors) >= self.max_symbols:
                 self.rejected_symbols += 1
                 return False
-            actor = SymbolActor(tick.instrument_key, self.mailbox_size, self.checkpoint_sink)
+            actor = SymbolActor(tick.instrument_key, self.mailbox_size, self.checkpoint_sink, self.checkpoint_interval_seconds)
             self.actors[tick.instrument_key] = actor
             actor.start()
         return actor.submit(tick)
