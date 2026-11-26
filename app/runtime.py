@@ -12,6 +12,7 @@ from .market_data.universe import Universe
 from .strategies.orb_gap import ORBGapStrategy
 from .strategies.momentum_explosion import MomentumExplosionStrategy
 from .signals.coordinator import SignalCoordinator
+from .actors.shadow_runtime import ShadowActorRegistry
 from .risk.stop_loss import structural_stop
 from .risk.targets import calculate_levels
 from .alerts.formatter import format_signal
@@ -30,10 +31,13 @@ class LiveRuntime:
         self.orb=ORBGapStrategy(settings.orb_range_minutes,settings.orb_entry_cutoff,settings.gap_min_pct)
         self.momentum=MomentumExplosionStrategy(settings.ema_fast,settings.ema_slow,settings.atr_period,settings.structure_lookback,settings.relative_volume_threshold,settings.atr_expansion_threshold,settings.momentum_entry_cutoff,settings.momentum_cooldown_minutes)
         self.coordinator=SignalCoordinator()
+        # Best-effort shadow observers; never authoritative for signals or alerts.
+        self.shadow_actors=ShadowActorRegistry(mailbox_size=256,max_symbols=max(1,len(self.universe.instruments)))
     async def start(self):
         if not self.settings.upstox_access_token: raise RuntimeError('UPSTOX_ACCESS_TOKEN missing')
         self.client=UpstoxClient(self.settings.upstox_access_token)
         self.running=True
+        self.shadow_actors.start()
         self.ws=WebsocketManager(self.client,[x['instrument_key'] for x in self.universe.instruments],decode_market_data,self.on_tick,stale_seconds=self.settings.websocket_stale_seconds)
         await self._warmup()
         self._restore_module_state()
@@ -44,8 +48,13 @@ class LiveRuntime:
         if self.ws:self.ws.stop()
         for t in self.tasks:t.cancel()
         if self.tasks: await asyncio.gather(*self.tasks,return_exceptions=True)
+        await self.shadow_actors.stop()
+        shadow_summary=self.shadow_actors.snapshot(); shadow_summary.pop('actors',None)
+        log.info('Shadow actor summary: %s',shadow_summary)
         if self.client: await self.client.close()
     async def on_tick(self,tick):
+        # Non-blocking, bounded shadow fan-out. Signal processing below is unchanged.
+        self.shadow_actors.submit(tick)
         self.one.add(tick); self.five.add(tick)
         now=tick.timestamp
         local=now.astimezone(__import__('zoneinfo').ZoneInfo(self.settings.timezone))
