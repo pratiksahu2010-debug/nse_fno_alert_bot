@@ -5,7 +5,7 @@
 - Architecture integration PR #22 is merged into `main`.
 - Legacy-schema migration-adoption test PR #23 is merged into `main`.
 - PR #23's GitHub Actions PostgreSQL 16 job passed: 112 tests in 1.84 seconds; Python compile check passed.
-- The push-triggered CI run for the resulting `main` commit was still in progress when this checklist was prepared. Re-check the run before treating `main` as green.
+- Main-branch CI run #41 for commit `daf72688581fb3f56b8ab6b004d82fac09b51f7a` completed successfully. The PostgreSQL service, full pytest job and Python compile step all passed.
 - There are no open pull requests at the time of this review.
 
 This is an engineering status record, not production-release approval.
@@ -82,7 +82,7 @@ The merged code and green PR-level CI are useful progress, but they do not prove
 |---|---|---|
 | Architecture phases 1–18 integrated | PR #22 merged | Complete in repository |
 | Legacy-schema migration test | PR #23 CI: 112 passed, PostgreSQL 16 | Complete in repository |
-| Main-branch CI after PR #23 | Run #41 was in progress at review time | Pending verification |
+| Main-branch CI after PR #23 | Run #41 completed successfully on merge commit | Passed |
 | F&O universe snapshot | Checked-in files are empty | Blocked |
 | Reconnect candle-gap repair | Not implemented | Open |
 | Actual Upstox V3 packet validation | Synthetic fixture only | Blocked |
