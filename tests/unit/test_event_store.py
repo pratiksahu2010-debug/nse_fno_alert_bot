@@ -101,6 +101,16 @@ def test_invalid_event_contract_is_rejected(session):
             payload={},
             idempotency_key="bad-version",
         )
+    with pytest.raises(ValueError):
+        append_event(
+            session,
+            aggregate_type="signal",
+            aggregate_id="signal-123",
+            aggregate_version=True,
+            event_type="SignalObserved",
+            payload={},
+            idempotency_key="bool-version",
+        )
     with pytest.raises(TypeError):
         append_event(
             session,
