@@ -28,7 +28,10 @@ aggregate/transaction coordinator.
 ## Transaction and retry behavior
 
 append_event uses a SQLAlchemy savepoint to isolate uniqueness conflicts and
-does not commit the caller's transaction. A retry with the same idempotency key
+does not commit the caller's transaction. On SQLite it explicitly starts the
+outer transaction before opening a savepoint, avoiding sqlite3 legacy-mode
+savepoint release behavior that can otherwise commit independently. A retry
+with the same idempotency key
 and identical logical content returns the existing event. Reusing the key for
 different content raises IdempotencyConflict; a different key colliding with
 an occupied aggregate version raises AggregateVersionConflict.
