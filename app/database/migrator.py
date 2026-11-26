@@ -64,10 +64,8 @@ def discover_migrations(directory: str | Path | None = None) -> list[Migration]:
 
 def split_sql_statements(sql: str) -> list[str]:
     """Split the project's simple DDL scripts; procedural SQL blocks are unsupported."""
-    # Protect semicolons inside full-line comments while preserving the
-    # comments in the resulting statement text. PostgreSQL accepts leading
-    # comments, and keeping them also preserves the splitter's documented
-    # behavior for callers that inspect returned statements.
+    # Protect semicolons inside full-line SQL comments without discarding
+    # comments or detaching them from the statement that follows.
     marker = "__SQL_COMMENT_SEMICOLON__"
     protected = re.sub(
         r"(?m)^([ \t]*--[^\n]*)",

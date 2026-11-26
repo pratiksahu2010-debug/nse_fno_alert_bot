@@ -18,6 +18,8 @@ class SymbolActor:
         self.accepting = True
         self.processed = 0
         self.dropped = 0
+        self.failed = 0
+        self.last_error = None
         self.last_timestamp = None
         self.last_price = None
         self.task = None
@@ -47,9 +49,15 @@ class SymbolActor:
             try:
                 if item is _STOP:
                     return
-                self.last_timestamp = item.timestamp
-                self.last_price = float(item.price)
-                self.processed += 1
+                try:
+                    self.last_timestamp = item.timestamp
+                    self.last_price = float(item.price)
+                    self.processed += 1
+                except Exception as exc:
+                    # A malformed shadow observation must not kill the actor
+                    # or interfere with the authoritative market-data path.
+                    self.failed += 1
+                    self.last_error = type(exc).__name__
             finally:
                 self.mailbox.task_done()
 
@@ -57,9 +65,21 @@ class SymbolActor:
         self.accepting = False
         if self.task is None:
             return
-        await self.mailbox.join()
-        await self.mailbox.put(_STOP)
-        await self.task
+        task = self.task
+        # If the consumer failed unexpectedly, Queue.join() could wait
+        # forever because queued items would never receive task_done().
+        if task.done():
+            while True:
+                try:
+                    self.mailbox.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                else:
+                    self.mailbox.task_done()
+        else:
+            await self.mailbox.join()
+            await self.mailbox.put(_STOP)
+        await asyncio.gather(task, return_exceptions=True)
         self.task = None
 
     def snapshot(self):
@@ -69,6 +89,8 @@ class SymbolActor:
             "queue_capacity": self.mailbox.maxsize,
             "processed": self.processed,
             "dropped": self.dropped,
+            "failed": self.failed,
+            "last_error": self.last_error,
             "last_timestamp": (
                 self.last_timestamp.isoformat() if self.last_timestamp else None
             ),
@@ -118,6 +140,11 @@ class ShadowActorRegistry:
             "queue_depth": sum(item["queue_depth"] for item in actors),
             "processed": sum(item["processed"] for item in actors),
             "dropped": sum(item["dropped"] for item in actors),
+            "failed": sum(item["failed"] for item in actors),
+            "last_error": next(
+                (item["last_error"] for item in reversed(actors) if item["last_error"]),
+                None,
+            ),
             "rejected_symbols": self.rejected_symbols,
             "actors": actors,
         }
