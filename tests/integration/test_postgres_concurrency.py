@@ -28,7 +28,7 @@ def postgres_engine():
 
 def test_postgres_migrations_apply_and_verify(postgres_engine):
     result = verify_migrations(postgres_engine)
-    assert result == {"ok": True, "current_version": 5}
+    assert result == {"ok": True, "current_version": 6}
 
 
 def test_postgres_aggregate_version_unique_constraint_serializes_writers(postgres_engine):
