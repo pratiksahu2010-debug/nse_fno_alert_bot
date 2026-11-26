@@ -1,6 +1,6 @@
 """Deterministic, side-effect-free aggregate replay primitives.
 
-Reducers and upcasters are injected as pure functions. This module has no
+Reducers and upcasters are injected pure functions. This module has no
 imports from the live runtime, strategies, broker, Telegram or order layers.
 """
 from copy import deepcopy
@@ -10,6 +10,7 @@ from typing import Callable
 from sqlalchemy import select
 
 from .models import AggregateSnapshotRow, DomainEventRow
+from .snapshots import verify_snapshot_checksum
 
 
 class ReplayError(RuntimeError):
@@ -51,7 +52,7 @@ def replay_aggregate(
     target_version: int | None = None,
     initial_state: dict | None = None,
 ) -> ReplayResult:
-    """Rebuild one aggregate using a snapshot and a contiguous event suffix.
+    """Rebuild one aggregate using a verified snapshot and contiguous event suffix.
 
     The reducer signature is reducer(state_copy, payload_copy) -> new_state.
     Reducers and upcasters must be deterministic and side-effect-free. The
@@ -91,9 +92,7 @@ def replay_aggregate(
         snapshot_version = 0
     else:
         anchor = session.execute(
-            select(DomainEventRow).where(
-                DomainEventRow.event_id == snapshot.last_event_id
-            )
+            select(DomainEventRow).where(DomainEventRow.event_id == snapshot.last_event_id)
         ).scalar_one_or_none()
         if anchor is None or (
             anchor.aggregate_type != aggregate_type
@@ -101,6 +100,7 @@ def replay_aggregate(
             or anchor.aggregate_version != snapshot.aggregate_version
         ):
             raise ReplayGapError("snapshot anchor does not match its aggregate/version")
+        verify_snapshot_checksum(session, snapshot)
         state = deepcopy(snapshot.state)
         start_version = snapshot.aggregate_version
         snapshot_version = snapshot.aggregate_version
