@@ -4,6 +4,8 @@ These actors intentionally do not evaluate strategies, persist signals, manage
 trades, or send alerts. The existing LiveRuntime remains authoritative.
 """
 import asyncio
+from datetime import datetime
+import math
 
 
 _STOP = object()
@@ -24,11 +26,59 @@ class SymbolActor:
         self.last_price = None
         self.task = None
 
+    def restore_checkpoint(self, checkpoint):
+        \"\"\"Restore validated observation-only state before the actor starts.\"\"\"
+        if self.task is not None or not self.mailbox.empty():
+            raise RuntimeError(\"checkpoint restore requires an idle, unstarted actor\")
+        timestamp = checkpoint.get(\"last_timestamp\")
+        price = checkpoint.get(\"last_price\")
+        processed = checkpoint.get(\"processed\", 0)
+        if not isinstance(timestamp, datetime) or timestamp.tzinfo is None:
+            raise ValueError(\"checkpoint timestamp must be timezone-aware\")
+        if isinstance(price, bool) or not isinstance(price, (int, float)) or not math.isfinite(float(price)) or float(price) <= 0:
+            raise ValueError(\"checkpoint price must be finite and positive\")
+        if type(processed) is not int or processed < 0:
+            raise ValueError(\"checkpoint processed count must be non-negative\")
+        self.last_timestamp = timestamp
+        self.last_price = float(price)
+        self.processed = processed
+
     def start(self):
         if self.task is None:
             self.task = asyncio.create_task(
                 self._run(), name=f"shadow-symbol-{self.instrument_key}"
             )
+
+    def restore_checkpoints(self, checkpoints):
+        \"\"\"Atomically seed actors before they start consuming ticks.\"\"\"
+        if self.accepting:
+            raise RuntimeError(\"cannot restore checkpoints after registry start\")
+        if not isinstance(checkpoints, dict):
+            raise TypeError(\"checkpoints must be a dictionary\")
+        if self.actors:
+            raise RuntimeError(\"checkpoint restore requires an empty registry\")
+        if len(checkpoints) > self.max_symbols:
+            raise ValueError(\"checkpoint set exceeds actor registry capacity\")
+        # Validate every checkpoint before creating any actor.
+        for key, value in checkpoints.items():
+            if not isinstance(key, str) or not key.strip() or not isinstance(value, dict):
+                raise ValueError(\"invalid actor checkpoint entry\")
+            timestamp = value.get(\"last_timestamp\")
+            price = value.get(\"last_price\")
+            processed = value.get(\"processed\", 0)
+            if not isinstance(timestamp, datetime) or timestamp.tzinfo is None:
+                raise ValueError(\"checkpoint timestamp must be timezone-aware\")
+            if isinstance(price, bool) or not isinstance(price, (int, float)) or not math.isfinite(float(price)) or float(price) <= 0:
+                raise ValueError(\"checkpoint price must be finite and positive\")
+            if type(processed) is not int or processed < 0:
+                raise ValueError(\"checkpoint processed count must be non-negative\")
+        restored = {}
+        for key, value in checkpoints.items():
+            actor = SymbolActor(key, self.mailbox_size)
+            actor.restore_checkpoint(value)
+            restored[key] = actor
+        self.actors.update(restored)
+        return len(restored)
 
     def submit(self, tick):
         if not self.accepting:
@@ -111,6 +161,8 @@ class ShadowActorRegistry:
 
     def start(self):
         self.accepting = True
+        for actor in self.actors.values():
+            actor.start()
 
     def submit(self, tick):
         if not self.accepting:
