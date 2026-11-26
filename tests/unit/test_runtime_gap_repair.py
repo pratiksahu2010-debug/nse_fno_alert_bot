@@ -51,8 +51,11 @@ async def test_reconnect_repair_backfills_completed_five_minute_bars_without_str
     runtime = _runtime(client, [key])
     runtime._repair_after_reconnect = LiveRuntime._repair_after_reconnect.__get__(runtime)
     await runtime._repair_after_reconnect()
-    # Future bars are filtered by parser; today's completed bars are restored.
-    assert [c.start for c in runtime.hist[key]] == [start]
+    # Only completed bars are retained; a later candle may still be forming.
+    expected = [start]
+    if datetime.now(timezone.utc) >= start + timedelta(minutes=10):
+        expected.append(start + timedelta(minutes=5))
+    assert [c.start for c in runtime.hist[key]] == expected
     assert runtime.hist[key][0].source == "historical"
     assert key not in runtime.repair_blocked_keys
     assert client.calls == [(key, "minutes", 5)]

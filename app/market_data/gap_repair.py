@@ -80,3 +80,15 @@ def parse_upstox_candles(
         parsed[start] = candle
 
     return [parsed[start] for start in sorted(parsed)]
+
+
+
+def merge_candle_history(existing, incoming, max_items=1200):
+    """Merge bars by start time, preferring complete exchange history on overlap."""
+    merged = {c.start: c for c in existing}
+    for candle in incoming:
+        previous = merged.get(candle.start)
+        if previous is None or candle.source == "historical":
+            merged[candle.start] = candle
+    ordered = [merged[start] for start in sorted(merged)]
+    return ordered[-max_items:]

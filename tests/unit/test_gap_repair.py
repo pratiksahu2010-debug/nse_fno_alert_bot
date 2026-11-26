@@ -71,3 +71,29 @@ def test_parser_accepts_one_minute_candles():
     )
     assert len(candles) == 1
     assert candles[0].end - candles[0].start == timedelta(minutes=1)
+
+
+
+def test_merge_repairs_internal_holes_and_prefers_historical_overlap():
+    from app.market_data.gap_repair import merge_candle_history
+    from app.market_data.models import Candle
+    start = datetime(2026, 11, 26, 3, 45, tzinfo=timezone.utc)
+    live = Candle("X", start, start + timedelta(minutes=5), 100, 101, 99, 100, 2, "live")
+    historical = Candle("X", start, start + timedelta(minutes=5), 100, 103, 99, 102, 10, "historical")
+    middle = Candle("X", start + timedelta(minutes=10), start + timedelta(minutes=15), 102, 104, 101, 103, 7, "historical")
+    existing_middle = Candle("X", start + timedelta(minutes=10), start + timedelta(minutes=15), 102, 103, 101, 102, 3)
+    merged = merge_candle_history([live, existing_middle], [historical, middle])
+    assert [c.start for c in merged] == [start, start + timedelta(minutes=10)]
+    assert merged[0].high == 103
+    assert merged[0].volume == 10
+
+
+def test_merge_keeps_history_ordered_and_bounded():
+    from app.market_data.gap_repair import merge_candle_history
+    from app.market_data.models import Candle
+    start = datetime(2026, 11, 26, 3, 45, tzinfo=timezone.utc)
+    existing = [Candle("X", start + timedelta(minutes=5*i), start + timedelta(minutes=5*(i+1)), 100, 101, 99, 100, 1) for i in range(5)]
+    incoming = [Candle("X", start + timedelta(minutes=2), start + timedelta(minutes=7), 100, 101, 99, 100, 1, "historical")]
+    merged = merge_candle_history(existing, incoming, max_items=3)
+    assert len(merged) == 3
+    assert merged == sorted(merged, key=lambda c: c.start)

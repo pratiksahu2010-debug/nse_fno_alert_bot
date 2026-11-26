@@ -8,7 +8,7 @@ from .market_data.websocket_manager import WebsocketManager
 from .market_data.protobuf_decoder import decode_market_data
 from .market_data.candle_builder import CandleBuilder
 from .market_data.models import Candle
-from .market_data.gap_repair import parse_upstox_candles
+from .market_data.gap_repair import merge_candle_history, parse_upstox_candles
 from .market_data.universe import Universe
 from .strategies.orb_gap import ORBGapStrategy
 from .strategies.momentum_explosion import MomentumExplosionStrategy
@@ -75,27 +75,23 @@ class LiveRuntime:
                 try:
                     async with semaphore:
                         five_response=await self.client.intraday_candles(key,'minutes',5)
-                        five_rows=five_response.get('data',{}).get('candles',[])
-                        five=parse_upstox_candles(key,five_rows,5,timezone_name=self.settings.timezone)
+                        five_data=five_response.get('data') if isinstance(five_response,dict) else None
+                        if not isinstance(five_data,dict) or not isinstance(five_data.get('candles'),list):
+                            raise ValueError('Upstox 5m intraday response is missing data.candles')
+                        five=parse_upstox_candles(key,five_data['candles'],5,timezone_name=self.settings.timezone)
                         one=[]
                         if self.one_hist.get(key):
                             one_response=await self.client.intraday_candles(key,'minutes',1)
-                            one_rows=one_response.get('data',{}).get('candles',[])
-                            one=parse_upstox_candles(key,one_rows,1,timezone_name=self.settings.timezone)
-                    # Merge only candles newer than the last completed candle already
-                    # retained. The websocket is not subscribed until this finishes.
-                    last_five=self.hist.get(key,[])[-1].start if self.hist.get(key) else None
-                    fresh_five=[c for c in five if last_five is None or c.start>last_five]
-                    if fresh_five:
-                        target=self.hist.setdefault(key,[])
-                        target.extend(fresh_five)
-                        if len(target)>1200: del target[:-1200]
-                    last_one=self.one_hist.get(key,[])[-1].start if self.one_hist.get(key) else None
-                    fresh_one=[c for c in one if last_one is None or c.start>last_one]
-                    if fresh_one:
-                        target=self.one_hist.setdefault(key,[])
-                        target.extend(fresh_one)
-                        if len(target)>1200: del target[:-1200]
+                            one_data=one_response.get('data') if isinstance(one_response,dict) else None
+                            if not isinstance(one_data,dict) or not isinstance(one_data.get('candles'),list):
+                                raise ValueError('Upstox 1m intraday response is missing data.candles')
+                            one=parse_upstox_candles(key,one_data['candles'],1,timezone_name=self.settings.timezone)
+                    # Merge by candle timestamp, not only after the newest bar: this
+                    # repairs holes inside the retained session as well as the tail.
+                    # Exchange history replaces partial live bars for matching times.
+                    self.hist[key]=merge_candle_history(self.hist.get(key,[]),five)
+                    if one or self.one_hist.get(key):
+                        self.one_hist[key]=merge_candle_history(self.one_hist.get(key,[]),one)
                     self.repair_blocked_keys.discard(key)
                     repaired+=1
                 except asyncio.CancelledError:
@@ -179,6 +175,9 @@ class LiveRuntime:
         # Retain bounded rolling history.
         if len(df)>1200: del df[:-1200]
     async def _on_five(self,c):
+        existing=self.hist.get(c.instrument_key,[])
+        if existing and c.start<=existing[-1].start:
+            return
         self._remember(c,5)
         rows=self.hist[c.instrument_key]
         await self._manage_trades(c, rows)
