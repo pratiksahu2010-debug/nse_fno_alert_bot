@@ -1,4 +1,5 @@
 from datetime import datetime,timezone
+from uuid import uuid4
 from sqlalchemy import String,Float,DateTime,Text,Integer,Boolean,ForeignKey,Index,UniqueConstraint,JSON
 from sqlalchemy.orm import Mapped,mapped_column
 from .connection import Base
@@ -83,3 +84,27 @@ class BacktestRunRow(Base):
 
 Index('ix_signals_symbol_module_time',SignalRow.symbol,SignalRow.module,SignalRow.timestamp)
 Index('ix_outbox_status_lease',OutboxRow.status,OutboxRow.lease_until)
+
+
+class DomainEventRow(Base):
+    """Append-only domain event ledger; intentionally not wired to signals yet."""
+    __tablename__ = 'domain_events'
+    event_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    aggregate_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    aggregate_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    aggregate_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    correlation_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    causation_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    source: Mapped[str] = mapped_column(String(80), nullable=False, default='application')
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    __table_args__ = (
+        UniqueConstraint('aggregate_type', 'aggregate_id', 'aggregate_version', name='uq_domain_event_aggregate_version'),
+        Index('ix_domain_events_aggregate', 'aggregate_type', 'aggregate_id', 'aggregate_version'),
+        Index('ix_domain_events_type_recorded', 'event_type', 'recorded_at'),
+        Index('ix_domain_events_correlation', 'correlation_id'),
+    )
