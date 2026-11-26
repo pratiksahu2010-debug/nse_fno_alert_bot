@@ -1,4 +1,5 @@
 from datetime import datetime,timezone
+from uuid import uuid4
 from sqlalchemy import String,Float,DateTime,Text,Integer,Boolean,ForeignKey,Index,UniqueConstraint,JSON
 from sqlalchemy.orm import Mapped,mapped_column
 from .connection import Base
@@ -87,10 +88,8 @@ Index('ix_outbox_status_lease',OutboxRow.status,OutboxRow.lease_until)
 
 class DomainEventRow(Base):
     """Append-only domain event ledger; intentionally not wired to signals yet."""
-    from uuid import uuid4
-
     __tablename__ = 'domain_events'
-    event_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(DomainEventRow.uuid4()))
+    event_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     aggregate_type: Mapped[str] = mapped_column(String(80), nullable=False)
     aggregate_id: Mapped[str] = mapped_column(String(160), nullable=False)
     aggregate_version: Mapped[int] = mapped_column(Integer, nullable=False)
