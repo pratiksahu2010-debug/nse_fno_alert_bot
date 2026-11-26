@@ -82,6 +82,15 @@ def append_event(
         occurred_at=occurred_at or datetime.now(timezone.utc),
     )
     try:
+        # sqlite3's legacy transaction mode does not start a DB transaction for
+        # SAVEPOINT alone. Releasing that first savepoint can therefore commit
+        # it outside the caller's transaction. Explicitly begin the outer
+        # SQLite transaction so caller rollback semantics match PostgreSQL.
+        connection = session.connection()
+        if connection.dialect.name == "sqlite":
+            driver_connection = connection.connection.driver_connection
+            if not driver_connection.in_transaction:
+                connection.exec_driver_sql("BEGIN")
         with session.begin_nested():
             session.add(row)
             session.flush()
