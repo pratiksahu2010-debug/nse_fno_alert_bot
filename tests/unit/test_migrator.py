@@ -35,9 +35,14 @@ def test_discovery_rejects_unversioned_sql_file(tmp_path: Path):
 
 
 def test_sql_splitter_keeps_comments_with_following_statement():
-    statements = split_sql_statements("-- comment\nCREATE TABLE x (id INTEGER);\nCREATE INDEX ix_x ON x(id);")
+    statements = split_sql_statements(
+        "-- comment; semicolon stays in comment\n"
+        "CREATE TABLE x (id INTEGER);\n"
+        "CREATE INDEX ix_x ON x(id);"
+    )
     assert len(statements) == 2
-    assert statements[0].startswith("-- comment")
+    assert statements[0].startswith("-- comment; semicolon stays in comment")
+    assert statements[0].endswith("CREATE TABLE x (id INTEGER)")
 
 
 def make_ledger(engine, rows):
