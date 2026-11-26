@@ -50,11 +50,8 @@ async def test_reconnect_repair_backfills_completed_five_minute_bars_without_str
     client = FakeClient({(key, 5): rows})
     runtime = _runtime(client, [key])
     runtime._repair_after_reconnect = LiveRuntime._repair_after_reconnect.__get__(runtime)
-    await runtime._repair_after_reconnect()
-    # Only completed bars are retained; a later candle may still be forming.
-    expected = [start]
-    if datetime.now(timezone.utc) >= start + timedelta(minutes=10):
-        expected.append(start + timedelta(minutes=5))
+    await runtime._repair_after_reconnect(now=start + timedelta(minutes=10))
+    expected = [start, start + timedelta(minutes=5)]
     assert [c.start for c in runtime.hist[key]] == expected
     assert runtime.hist[key][0].source == "historical"
     assert key not in runtime.repair_blocked_keys
@@ -78,6 +75,6 @@ async def test_reconnect_repairs_one_minute_history_when_microstructure_history_
     client = FakeClient({(key, 5): [], (key, 1): [_row(start)]})
     runtime = _runtime(client, [key])
     runtime.one_hist[key] = [Candle(key, start - timedelta(minutes=1), start, 99, 100, 98, 99, 10)]
-    await LiveRuntime._repair_after_reconnect(runtime)
+    await LiveRuntime._repair_after_reconnect(runtime, now=start + timedelta(minutes=1))
     assert len(runtime.one_hist[key]) == 2
     assert client.calls == [(key, "minutes", 5), (key, "minutes", 1)]

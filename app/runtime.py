@@ -54,7 +54,7 @@ class LiveRuntime:
         shadow_summary=self.shadow_actors.snapshot(); shadow_summary.pop('actors',None)
         log.info('Shadow actor summary: %s',shadow_summary)
         if self.client: await self.client.close()
-    async def _repair_after_reconnect(self):
+    async def _repair_after_reconnect(self, now=None):
         """Backfill completed session candles before the feed resumes live subscriptions.
 
         Historical bars rebuild indicator context but are deliberately not replayed
@@ -62,7 +62,7 @@ class LiveRuntime:
         A symbol whose repair request or payload validation fails remains blocked
         from signal processing until a later reconnect repairs it successfully.
         """
-        from zoneinfo import ZoneInfo
+        now=now or datetime.now(timezone.utc)
         if not self.universe.instruments:
             return
         async with self._repair_lock:
@@ -78,14 +78,14 @@ class LiveRuntime:
                         five_data=five_response.get('data') if isinstance(five_response,dict) else None
                         if not isinstance(five_data,dict) or not isinstance(five_data.get('candles'),list):
                             raise ValueError('Upstox 5m intraday response is missing data.candles')
-                        five=parse_upstox_candles(key,five_data['candles'],5,timezone_name=self.settings.timezone)
+                        five=parse_upstox_candles(key,five_data['candles'],5,now=now,timezone_name=self.settings.timezone)
                         one=[]
                         if self.one_hist.get(key):
                             one_response=await self.client.intraday_candles(key,'minutes',1)
                             one_data=one_response.get('data') if isinstance(one_response,dict) else None
                             if not isinstance(one_data,dict) or not isinstance(one_data.get('candles'),list):
                                 raise ValueError('Upstox 1m intraday response is missing data.candles')
-                            one=parse_upstox_candles(key,one_data['candles'],1,timezone_name=self.settings.timezone)
+                            one=parse_upstox_candles(key,one_data['candles'],1,now=now,timezone_name=self.settings.timezone)
                     # Merge by candle timestamp, not only after the newest bar: this
                     # repairs holes inside the retained session as well as the tail.
                     # Exchange history replaces partial live bars for matching times.
