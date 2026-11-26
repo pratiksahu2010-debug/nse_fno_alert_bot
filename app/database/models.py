@@ -125,3 +125,17 @@ class AggregateSnapshotRow(Base):
         UniqueConstraint('aggregate_type', 'aggregate_id', 'aggregate_version', name='uq_aggregate_snapshot_version'),
         Index('ix_aggregate_snapshots_latest', 'aggregate_type', 'aggregate_id', 'aggregate_version'),
     )
+
+
+class AggregateProjectionRow(Base):
+    """Current CQRS read model for one aggregate."""
+    __tablename__ = 'aggregate_projections'
+    aggregate_type: Mapped[str] = mapped_column(String(80), primary_key=True)
+    aggregate_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    aggregate_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[dict] = mapped_column(JSON, nullable=False)
+    last_event_id: Mapped[str] = mapped_column(ForeignKey('domain_events.event_id'), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    __table_args__ = (
+        Index('ix_aggregate_projections_version', 'aggregate_type', 'aggregate_version'),
+    )
