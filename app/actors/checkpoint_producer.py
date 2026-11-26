@@ -198,12 +198,16 @@ class ShadowCheckpointProducer:
     async def stop(self, timeout=5.0):
         self.accepting = False
         drained = await self.flush(timeout=timeout)
+        if not drained:
+            # Keep the worker alive to finish the in-flight database operation
+            # and drain queued work. The caller may retry stop() later.
+            return False
         task = self._task
         if task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             self._task = None
-        return drained
+        return True
 
     def snapshot(self):
         return {
