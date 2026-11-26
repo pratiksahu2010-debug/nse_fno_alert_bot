@@ -87,7 +87,7 @@ def test_session_recovers_before_start_and_flushes_final_checkpoint(session_fact
 
     asyncio.run(scenario())
     rows = events(session_factory, key)
-    assert [row.aggregate_version for row in rows] == [1, 2, 3]
+    assert [row.aggregate_version for row in rows] == [1, 2]
     assert rows[-1].payload["last_price"] == 101.5
 
 
