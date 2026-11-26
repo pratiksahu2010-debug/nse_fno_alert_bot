@@ -67,6 +67,8 @@ Set all variables from `.env.example` in Render. `GET /health` distinguishes DB,
 * The included backtester supports both modules, chronological completed 5-minute bars, slippage, brokerage/other flat costs, conservative stop/target ambiguity, TP1/breakeven and trailing logic. Taxes/exchange charges are supplied as a configurable flat cost input rather than calculated from the latest statutory schedule; add the applicable contract-note charges for reliable net P&L.
 * No strategy can guarantee win rate or profitability. Paper trade and validate out-of-sample before relying on alerts.
 
+See [Post-merge release gates](docs/architecture/POST_MERGE_RELEASE_GATES_2026-11-26.md) for the current production blockers and the exact staging-only acceptance checklist.
+
 ## Tests and verified build
 
 ```bash
@@ -74,4 +76,6 @@ pytest -q
 python -m compileall -q app scripts tests
 ```
 
-The delivered build was verified with **19 passing unit tests**, zero failures, Python compilation, and SQLite schema creation for all 12 ORM tables. Tests are deterministic and do not call live APIs. Neon connectivity, Upstox authorization/feed, Render deployment, and Telegram delivery were not live-tested because no credentials or account access were supplied.
+The legacy-schema PostgreSQL integration test added in PR #23 passed in GitHub Actions with PostgreSQL 16: **112 tests passed in 1.84s**, and the compile check passed. The post-merge main-branch CI run #41 for commit `daf72688581fb3f56b8ab6b004d82fac09b51f7a` subsequently completed successfully, including PostgreSQL service initialization, the full pytest suite, and the Python compile check.
+
+Tests are deterministic and do not call live APIs. Neon connectivity, Upstox authorization/feed, Render deployment, and Telegram delivery have not been live-tested because no credentials or account access were supplied. Do not infer production readiness from CI alone.
