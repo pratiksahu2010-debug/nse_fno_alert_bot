@@ -11,7 +11,7 @@ from app.database.replay import (
     UnknownEventTypeError,
     replay_aggregate,
 )
-from app.database.snapshots import save_snapshot
+from app.database.snapshots import SnapshotIntegrityError, save_snapshot
 
 
 @pytest.fixture
@@ -25,14 +25,9 @@ def session():
 
 def add_event(session, version, key, payload, schema_version=1, event_type="ValueSet"):
     return append_event(
-        session,
-        aggregate_type="account",
-        aggregate_id="A-1",
-        aggregate_version=version,
-        event_type=event_type,
-        payload=payload,
-        idempotency_key=key,
-        schema_version=schema_version,
+        session, aggregate_type="account", aggregate_id="A-1",
+        aggregate_version=version, event_type=event_type, payload=payload,
+        idempotency_key=key, schema_version=schema_version,
     )
 
 
@@ -45,13 +40,9 @@ def test_replay_reconstructs_aggregate_from_genesis(session):
     add_event(session, 1, "e1", {"balance": 10})
     add_event(session, 2, "e2", {"balance": 25})
     session.commit()
-
     result = replay_aggregate(
-        session,
-        aggregate_type="account",
-        aggregate_id="A-1",
-        reducers={"ValueSet": reducer},
-        initial_state={"balance": 0},
+        session, aggregate_type="account", aggregate_id="A-1",
+        reducers={"ValueSet": reducer}, initial_state={"balance": 0},
     )
     assert result.state == {"balance": 25}
     assert result.aggregate_version == 2
@@ -59,23 +50,16 @@ def test_replay_reconstructs_aggregate_from_genesis(session):
     assert result.snapshot_version == 0
 
 
-def test_replay_uses_snapshot_then_applies_event_suffix(session):
+def test_replay_uses_verified_snapshot_then_event_suffix(session):
     first = add_event(session, 1, "e1", {"balance": 10})
     save_snapshot(
-        session,
-        aggregate_type="account",
-        aggregate_id="A-1",
-        aggregate_version=1,
-        state={"balance": 10},
-        last_event_id=first.event_id,
+        session, aggregate_type="account", aggregate_id="A-1",
+        aggregate_version=1, state={"balance": 10}, last_event_id=first.event_id,
     )
     add_event(session, 2, "e2", {"balance": 25})
     session.commit()
-
     result = replay_aggregate(
-        session,
-        aggregate_type="account",
-        aggregate_id="A-1",
+        session, aggregate_type="account", aggregate_id="A-1",
         reducers={"ValueSet": reducer},
     )
     assert result.state == {"balance": 25}
@@ -88,12 +72,9 @@ def test_replay_rejects_missing_aggregate_version(session):
     add_event(session, 1, "e1", {"balance": 10})
     add_event(session, 3, "e3", {"balance": 30})
     session.commit()
-
     with pytest.raises(ReplayGapError):
         replay_aggregate(
-            session,
-            aggregate_type="account",
-            aggregate_id="A-1",
+            session, aggregate_type="account", aggregate_id="A-1",
             reducers={"ValueSet": reducer},
         )
 
@@ -103,11 +84,8 @@ def test_replay_rejects_requested_version_beyond_history(session):
     session.commit()
     with pytest.raises(ReplayGapError):
         replay_aggregate(
-            session,
-            aggregate_type="account",
-            aggregate_id="A-1",
-            reducers={"ValueSet": reducer},
-            target_version=2,
+            session, aggregate_type="account", aggregate_id="A-1",
+            reducers={"ValueSet": reducer}, target_version=2,
         )
 
 
@@ -116,9 +94,7 @@ def test_replay_rejects_unknown_event_type(session):
     session.commit()
     with pytest.raises(UnknownEventTypeError):
         replay_aggregate(
-            session,
-            aggregate_type="account",
-            aggregate_id="A-1",
+            session, aggregate_type="account", aggregate_id="A-1",
             reducers={"ValueSet": reducer},
         )
 
@@ -126,11 +102,8 @@ def test_replay_rejects_unknown_event_type(session):
 def test_replay_applies_explicit_schema_upcaster(session):
     add_event(session, 1, "e1", {"amount": 7}, schema_version=1)
     session.commit()
-
     result = replay_aggregate(
-        session,
-        aggregate_type="account",
-        aggregate_id="A-1",
+        session, aggregate_type="account", aggregate_id="A-1",
         reducers={"ValueSet": reducer},
         upcasters={("ValueSet", 1): lambda payload: {"balance": payload["amount"]}},
         target_schema_versions={"ValueSet": 2},
@@ -143,24 +116,17 @@ def test_replay_requires_missing_upcaster_and_rejects_newer_schema(session):
     session.commit()
     with pytest.raises(MissingUpcasterError):
         replay_aggregate(
-            session,
-            aggregate_type="account",
-            aggregate_id="A-1",
-            reducers={"ValueSet": reducer},
-            target_schema_versions={"ValueSet": 2},
+            session, aggregate_type="account", aggregate_id="A-1",
+            reducers={"ValueSet": reducer}, target_schema_versions={"ValueSet": 2},
         )
-
     add_event(session, 2, "e2", {"balance": 8}, schema_version=3)
     session.commit()
     with pytest.raises(EventSchemaVersionError):
         replay_aggregate(
-            session,
-            aggregate_type="account",
-            aggregate_id="A-1",
+            session, aggregate_type="account", aggregate_id="A-1",
             reducers={"ValueSet": reducer},
             upcasters={("ValueSet", 1): lambda payload: payload},
-            target_version=2,
-            target_schema_versions={"ValueSet": 2},
+            target_version=2, target_schema_versions={"ValueSet": 2},
         )
 
 
@@ -169,13 +135,28 @@ def test_replay_does_not_mutate_initial_state_or_event_payload(session):
     payload = {"balance": 50}
     add_event(session, 1, "e1", payload)
     session.commit()
-
     replay_aggregate(
-        session,
-        aggregate_type="account",
-        aggregate_id="A-1",
-        reducers={"ValueSet": reducer},
-        initial_state=initial,
+        session, aggregate_type="account", aggregate_id="A-1",
+        reducers={"ValueSet": reducer}, initial_state=initial,
     )
     assert initial == {"balance": 0}
     assert payload == {"balance": 50}
+
+
+def test_replay_fails_closed_when_snapshot_state_is_tampered(session):
+    first = add_event(session, 1, "e1", {"balance": 10})
+    save_snapshot(
+        session, aggregate_type="account", aggregate_id="A-1",
+        aggregate_version=1, state={"balance": 10}, last_event_id=first.event_id,
+    )
+    add_event(session, 2, "e2", {"balance": 25})
+    session.commit()
+    from app.database.models import AggregateSnapshotRow
+    snapshot = session.query(AggregateSnapshotRow).one()
+    snapshot.state = {"balance": 999}
+    session.commit()
+    with pytest.raises(SnapshotIntegrityError):
+        replay_aggregate(
+            session, aggregate_type="account", aggregate_id="A-1",
+            reducers={"ValueSet": reducer},
+        )
