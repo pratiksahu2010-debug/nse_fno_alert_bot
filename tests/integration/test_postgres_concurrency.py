@@ -5,12 +5,17 @@ from threading import Barrier
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
 from app.database.domain_outbox import enqueue_domain_event
 from app.database.event_store import AggregateVersionConflict, append_event
-from app.database.migrator import apply_migrations, verify_migrations
+from app.database.migrator import (
+    apply_migrations,
+    discover_migrations,
+    split_sql_statements,
+    verify_migrations,
+)
 from app.database.outbox_worker import claim_domain_outbox
 from app.database.snapshots import save_snapshot, verify_snapshot_checksum
 
@@ -30,6 +35,56 @@ def postgres_engine():
 def test_postgres_migrations_apply_and_verify(postgres_engine):
     result = verify_migrations(postgres_engine)
     assert result == {"ok": True, "current_version": 6}
+
+
+def test_postgres_migrations_adopt_existing_legacy_schema_without_losing_rows(postgres_engine):
+    """Adopt a pre-ledger schema created from the original baseline DDL."""
+    schema = f"legacy_adoption_{uuid4().hex}"
+    with postgres_engine.begin() as connection:
+        connection.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
+
+    legacy_engine = create_engine(
+        DATABASE_URL,
+        connect_args={"options": f"-csearch_path={schema}"},
+        pool_pre_ping=True,
+    )
+    try:
+        baseline = discover_migrations()[0]
+        with legacy_engine.begin() as connection:
+            for statement in split_sql_statements(baseline.sql):
+                connection.exec_driver_sql(statement)
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO signals
+                        (signal_id, symbol, module, direction, setup, timestamp,
+                         entry, metadata_json, relation)
+                    VALUES
+                        (:signal_id, 'RELIANCE', 'MOMENTUM_EXPLOSION', 'CALL',
+                         'LEGACY_TEST', now(), 1234.5, '{}', 'INDEPENDENT')
+                    """
+                ),
+                {"signal_id": f"legacy-{uuid4().hex[:24]}"},
+            )
+
+        result = apply_migrations(legacy_engine)
+        assert result == {
+            "ok": True,
+            "newly_applied": [1, 2, 3, 4, 5, 6],
+            "current_version": 6,
+        }
+        assert verify_migrations(legacy_engine) == {"ok": True, "current_version": 6}
+
+        with legacy_engine.connect() as connection:
+            row = connection.execute(
+                text("SELECT symbol, entry FROM signals WHERE setup = 'LEGACY_TEST'")
+            ).one()
+            assert row.symbol == "RELIANCE"
+            assert row.entry == 1234.5
+    finally:
+        legacy_engine.dispose()
+        with postgres_engine.begin() as connection:
+            connection.exec_driver_sql(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
 
 
 def test_postgres_snapshot_checksum_round_trip(postgres_engine):
