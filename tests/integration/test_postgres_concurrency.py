@@ -12,6 +12,7 @@ from app.database.domain_outbox import enqueue_domain_event
 from app.database.event_store import AggregateVersionConflict, append_event
 from app.database.migrator import apply_migrations, verify_migrations
 from app.database.outbox_worker import claim_domain_outbox
+from app.database.snapshots import save_snapshot, verify_snapshot_checksum
 
 
 DATABASE_URL = getenv("TEST_DATABASE_URL")
@@ -28,7 +29,31 @@ def postgres_engine():
 
 def test_postgres_migrations_apply_and_verify(postgres_engine):
     result = verify_migrations(postgres_engine)
-    assert result == {"ok": True, "current_version": 5}
+    assert result == {"ok": True, "current_version": 6}
+
+
+def test_postgres_snapshot_checksum_round_trip(postgres_engine):
+    aggregate_id = str(uuid4())
+    with Session(postgres_engine) as session:
+        event = append_event(
+            session,
+            aggregate_type="snapshot-test",
+            aggregate_id=aggregate_id,
+            aggregate_version=1,
+            event_type="Created",
+            payload={"state": "ready"},
+            idempotency_key=f"snapshot-{aggregate_id}",
+        )
+        snapshot = save_snapshot(
+            session,
+            aggregate_type="snapshot-test",
+            aggregate_id=aggregate_id,
+            aggregate_version=1,
+            state={"state": "ready"},
+            last_event_id=event.event_id,
+        )
+        session.commit()
+        assert len(verify_snapshot_checksum(session, snapshot)) == 64
 
 
 def test_postgres_aggregate_version_unique_constraint_serializes_writers(postgres_engine):
