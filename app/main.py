@@ -3,12 +3,14 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from .config import Settings
 from .logging_config import configure_logging
 from .database.connection import Base, make_engine
 from .runtime import LiveRuntime
 from .market_data.universe_bootstrap import refresh_fno_universe
+from .readiness import readiness_snapshot
 
 settings = Settings()
 configure_logging(settings.log_level)
@@ -99,6 +101,20 @@ async def health():
         "alert_only": True,
         "order_placement_enabled": False,
     }
+
+
+@app.get("/ready")
+def ready():
+    snapshot = readiness_snapshot(engine, runtime, initializing, startup_error)
+    return JSONResponse(
+        status_code=200 if snapshot["ready"] else 503,
+        content=snapshot,
+    )
+
+
+@app.get("/live")
+def live():
+    return {"live": True, "alert_only": True, "order_placement_enabled": False}
 
 
 @app.get("/status")
