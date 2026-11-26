@@ -44,7 +44,7 @@ The script downloads the NSE BOD instrument master and writes `config/nse_fno_un
 
 ## Database and deployment
 
-The app creates SQLAlchemy tables at boot for a first-run setup. SQL schema is in `app/database/migrations/0001_initial.sql`. Set Neon `DATABASE_URL` with `sslmode=require`.
+Database schema is managed by ordered, checksummed PostgreSQL migrations in `app/database/migrations/`. Before starting a new deployment or applying a schema update, run `python -m scripts.migrate` with the intended Neon `DATABASE_URL` (SSL required). App startup only verifies the migration ledger and refuses to initialize the trading runtime if migrations are missing or have changed. It does not run DDL automatically.
 
 Render settings:
 
