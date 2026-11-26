@@ -98,11 +98,15 @@ class SymbolActor:
             finally:
                 self.mailbox.task_done()
 
-    async def stop(self):
+    async def stop(self, timeout=5.0):
+        """Stop accepting work and drain within a bounded, retryable timeout."""
+        if timeout <= 0:
+            raise ValueError("timeout must be positive")
         self.accepting = False
-        if self.task is None:
-            return
         task = self.task
+        if task is None:
+            return True
+
         # If the consumer failed unexpectedly, Queue.join() could wait
         # forever because queued items would never receive task_done().
         if task.done():
@@ -114,10 +118,41 @@ class SymbolActor:
                 else:
                     self.mailbox.task_done()
         else:
-            await self.mailbox.join()
-            await self.mailbox.put(_STOP)
+            try:
+                await asyncio.wait_for(self.mailbox.join(), timeout=timeout)
+            except asyncio.TimeoutError:
+                # Leave the consumer alive; callers can retry after it drains.
+                return False
+            if not task.done():
+                await self.mailbox.put(_STOP)
+
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        except asyncio.TimeoutError:
+            # Do not cancel a worker that may still be finishing accepted work.
+            return False
+        except asyncio.CancelledError:
+            # A cancelled/failed consumer cannot drain any remaining queue items.
+            while True:
+                try:
+                    self.mailbox.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                else:
+                    self.mailbox.task_done()
+        except Exception:
+            # Preserve the old shutdown guarantee: a crashed consumer must not
+            # prevent cleanup or leave queued items counted as unfinished.
+            while True:
+                try:
+                    self.mailbox.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                else:
+                    self.mailbox.task_done()
         await asyncio.gather(task, return_exceptions=True)
         self.task = None
+        return True
 
     def snapshot(self):
         return {
@@ -202,10 +237,17 @@ class ShadowActorRegistry:
             actor.start()
         return actor.submit(tick)
 
-    async def stop(self):
+    async def stop(self, timeout=5.0):
+        """Stop every actor; return false if any mailbox cannot drain in time."""
+        if timeout <= 0:
+            raise ValueError("timeout must be positive")
         self.accepting = False
-        if self.actors:
-            await asyncio.gather(*(actor.stop() for actor in self.actors.values()))
+        if not self.actors:
+            return True
+        results = await asyncio.gather(
+            *(actor.stop(timeout=timeout) for actor in self.actors.values())
+        )
+        return all(results)
 
     def snapshot(self):
         actors = [actor.snapshot() for actor in self.actors.values()]

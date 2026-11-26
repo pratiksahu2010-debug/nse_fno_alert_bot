@@ -118,7 +118,9 @@ class ShadowActorSession:
         self.state = ShadowSessionState.STOPPING
 
         # Registry stops accepting first and drains all already accepted ticks.
-        await self.registry.stop()
+        actors_drained = await self.registry.stop(timeout=flush_timeout)
+        if not actors_drained:
+            return False
 
         # Actor callbacks are cadence-limited. Force one final observation
         # checkpoint after the mailbox drain, while the writer is still live.

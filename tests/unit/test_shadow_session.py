@@ -135,3 +135,24 @@ def test_recovery_failure_does_not_start_any_actor(session_factory):
     assert session.state == ShadowSessionState.FAILED
     assert session.registry.accepting is False
     assert all(actor.task is None for actor in session.registry.actors.values())
+
+
+
+def test_session_remains_stopping_when_actor_drain_times_out(session_factory):
+    session = ShadowActorSession(session_factory, ["NSE_FO|NIFTY"])
+
+    async def scenario():
+        await session.start()
+
+        async def timed_out_registry_stop(*, timeout):
+            return False
+
+        session.registry.stop = timed_out_registry_stop
+        assert await session.stop(flush_timeout=0.01) is False
+        assert session.state == ShadowSessionState.STOPPING
+        assert session.producer.accepting is True
+
+        assert await session.producer.stop(timeout=1.0) is True
+        assert await session.recovery.stop(timeout=1.0) is True
+
+    asyncio.run(scenario())
