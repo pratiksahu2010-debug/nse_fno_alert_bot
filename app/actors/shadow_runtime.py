@@ -131,6 +131,25 @@ class SymbolActor:
         except asyncio.TimeoutError:
             # Do not cancel a worker that may still be finishing accepted work.
             return False
+        except asyncio.CancelledError:
+            # A cancelled/failed consumer cannot drain any remaining queue items.
+            while True:
+                try:
+                    self.mailbox.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                else:
+                    self.mailbox.task_done()
+        except Exception:
+            # Preserve the old shutdown guarantee: a crashed consumer must not
+            # prevent cleanup or leave queued items counted as unfinished.
+            while True:
+                try:
+                    self.mailbox.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                else:
+                    self.mailbox.task_done()
         await asyncio.gather(task, return_exceptions=True)
         self.task = None
         return True
