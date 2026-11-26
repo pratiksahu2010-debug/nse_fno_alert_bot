@@ -25,6 +25,10 @@ def session():
     engine.dispose()
 
 
+def as_utc(value):
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
 def add_outbox(session, key="e1", available_at=None):
     event = append_event(
         session,
@@ -57,7 +61,7 @@ def test_claims_due_rows_and_increments_attempt(session):
     assert row.status == "PROCESSING"
     assert row.attempts == 1
     assert row.lease_owner == "worker-a"
-    assert row.lease_until == now + timedelta(seconds=30)
+    assert as_utc(row.lease_until) == now + timedelta(seconds=30)
 
 
 def test_future_rows_are_not_claimed(session):
@@ -115,7 +119,7 @@ def test_retry_backoff_and_dead_letter_after_attempt_limit(session):
     )
     session.commit()
     assert retry.status == "PENDING"
-    assert retry.available_at == now + timedelta(seconds=10)
+    assert as_utc(retry.available_at) == now + timedelta(seconds=10)
 
     claimed = claim_domain_outbox(
         session,
