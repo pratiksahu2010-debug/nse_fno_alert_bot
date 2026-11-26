@@ -149,6 +149,9 @@ def test_registry_starts_restored_actor_only_after_explicit_start():
         }
     })
     assert registry.actors["RESTORED"].task is None
-    registry.start()
-    assert registry.actors["RESTORED"].task is not None
-    asyncio.run(registry.stop())
+    async def start_and_stop():
+        registry.start()
+        assert registry.actors["RESTORED"].task is not None
+        await registry.stop()
+
+    asyncio.run(start_and_stop())
