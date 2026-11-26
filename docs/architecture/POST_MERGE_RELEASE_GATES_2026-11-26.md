@@ -6,7 +6,7 @@
 - Legacy-schema migration-adoption test PR #23 is merged into `main`.
 - PR #23's GitHub Actions PostgreSQL 16 job passed: 112 tests in 1.84 seconds; Python compile check passed.
 - Main-branch CI run #41 for commit `daf72688581fb3f56b8ab6b004d82fac09b51f7a` completed successfully. The PostgreSQL service, full pytest job and Python compile step all passed.
-- There are no open pull requests at the time of this review.
+- Before this documentation PR was opened, no other open pull requests remained.
 
 This is an engineering status record, not production-release approval.
 
