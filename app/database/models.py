@@ -139,3 +139,25 @@ class AggregateProjectionRow(Base):
     __table_args__ = (
         Index('ix_aggregate_projections_version', 'aggregate_type', 'aggregate_version'),
     )
+
+
+class DomainOutboxRow(Base):
+    """Durable domain-event delivery intent; not the Telegram alert outbox."""
+    __tablename__ = 'domain_outbox'
+    outbox_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    event_id: Mapped[str] = mapped_column(ForeignKey('domain_events.event_id'), nullable=False)
+    destination: Mapped[str] = mapped_column(String(120), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default='PENDING')
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    lease_owner: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    __table_args__ = (
+        UniqueConstraint('event_id', 'destination', name='uq_domain_outbox_event_destination'),
+        Index('ix_domain_outbox_ready', 'status', 'available_at'),
+        Index('ix_domain_outbox_lease', 'status', 'lease_until'),
+    )
