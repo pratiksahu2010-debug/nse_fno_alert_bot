@@ -108,3 +108,56 @@ class DomainEventRow(Base):
         Index('ix_domain_events_type_recorded', 'event_type', 'recorded_at'),
         Index('ix_domain_events_correlation', 'correlation_id'),
     )
+
+
+class AggregateSnapshotRow(Base):
+    """Immutable snapshot anchored to a domain event."""
+    __tablename__ = 'aggregate_snapshots'
+    snapshot_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    aggregate_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    aggregate_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    aggregate_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[dict] = mapped_column(JSON, nullable=False)
+    last_event_id: Mapped[str] = mapped_column(ForeignKey('domain_events.event_id'), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    __table_args__ = (
+        UniqueConstraint('aggregate_type', 'aggregate_id', 'aggregate_version', name='uq_aggregate_snapshot_version'),
+        Index('ix_aggregate_snapshots_latest', 'aggregate_type', 'aggregate_id', 'aggregate_version'),
+    )
+
+
+class AggregateProjectionRow(Base):
+    """Current CQRS read model for one aggregate."""
+    __tablename__ = 'aggregate_projections'
+    aggregate_type: Mapped[str] = mapped_column(String(80), primary_key=True)
+    aggregate_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    aggregate_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[dict] = mapped_column(JSON, nullable=False)
+    last_event_id: Mapped[str] = mapped_column(ForeignKey('domain_events.event_id'), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    __table_args__ = (
+        Index('ix_aggregate_projections_version', 'aggregate_type', 'aggregate_version'),
+    )
+
+
+class DomainOutboxRow(Base):
+    """Durable domain-event delivery intent; not the Telegram alert outbox."""
+    __tablename__ = 'domain_outbox'
+    outbox_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    event_id: Mapped[str] = mapped_column(ForeignKey('domain_events.event_id'), nullable=False)
+    destination: Mapped[str] = mapped_column(String(120), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default='PENDING')
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    lease_owner: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    __table_args__ = (
+        UniqueConstraint('event_id', 'destination', name='uq_domain_outbox_event_destination'),
+        Index('ix_domain_outbox_ready', 'status', 'available_at'),
+        Index('ix_domain_outbox_lease', 'status', 'lease_until'),
+    )

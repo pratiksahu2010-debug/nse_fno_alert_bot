@@ -7,7 +7,8 @@ from fastapi.responses import JSONResponse
 
 from .config import Settings
 from .logging_config import configure_logging
-from .database.connection import Base, make_engine
+from .database.connection import make_engine
+from .database.migrator import verify_migrations
 from .runtime import LiveRuntime
 from .market_data.universe_bootstrap import refresh_fno_universe
 from .readiness import readiness_snapshot
@@ -16,7 +17,6 @@ settings = Settings()
 configure_logging(settings.log_level)
 log = logging.getLogger(__name__)
 engine = make_engine(settings.database_url)
-Base.metadata.create_all(engine)
 
 runtime = None
 startup_task = None
@@ -30,6 +30,8 @@ async def initialize_runtime():
     startup_error = None
     candidate = None
     try:
+        # Schema verification is read-only; apply migrations explicitly before deployment.
+        await asyncio.to_thread(verify_migrations, engine)
         # Build and validate the complete reviewed stock universe before starting signals.
         snapshot = await refresh_fno_universe(
             settings.upstox_access_token,
