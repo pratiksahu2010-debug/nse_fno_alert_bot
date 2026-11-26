@@ -17,7 +17,7 @@ from app.database.migrator import (
 
 def test_repository_migrations_are_sequential_and_checksummed():
     migrations = discover_migrations()
-    assert [item.version for item in migrations] == [1, 2, 3, 4, 5]
+    assert [item.version for item in migrations] == [1, 2, 3, 4, 5, 6]
     assert all(len(item.checksum) == 64 for item in migrations)
 
 
@@ -78,7 +78,7 @@ def test_verify_migrations_accepts_exact_applied_set():
             [(item.version, item.filename, item.checksum) for item in migrations],
         )
         result = verify_migrations(engine)
-        assert result == {"ok": True, "current_version": 5}
+        assert result == {"ok": True, "current_version": 6}
     finally:
         engine.dispose()
 
