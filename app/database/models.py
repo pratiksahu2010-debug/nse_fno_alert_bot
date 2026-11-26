@@ -108,3 +108,20 @@ class DomainEventRow(Base):
         Index('ix_domain_events_type_recorded', 'event_type', 'recorded_at'),
         Index('ix_domain_events_correlation', 'correlation_id'),
     )
+
+
+class AggregateSnapshotRow(Base):
+    """Immutable snapshot anchored to a domain event."""
+    __tablename__ = 'aggregate_snapshots'
+    snapshot_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    aggregate_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    aggregate_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    aggregate_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[dict] = mapped_column(JSON, nullable=False)
+    last_event_id: Mapped[str] = mapped_column(ForeignKey('domain_events.event_id'), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    __table_args__ = (
+        UniqueConstraint('aggregate_type', 'aggregate_id', 'aggregate_version', name='uq_aggregate_snapshot_version'),
+        Index('ix_aggregate_snapshots_latest', 'aggregate_type', 'aggregate_id', 'aggregate_version'),
+    )
