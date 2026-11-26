@@ -76,6 +76,6 @@ pytest -q
 python -m compileall -q app scripts tests
 ```
 
-The legacy-schema PostgreSQL integration test added in PR #23 passed in GitHub Actions with PostgreSQL 16: **112 tests passed in 1.84s**, and the compile check passed. That result is evidence for the PR #23 head, not a substitute for a green CI run on the final current `main` commit. The main-branch CI run triggered by the PR #23 merge was still in progress at the time this release-gate update was prepared.
+The legacy-schema PostgreSQL integration test added in PR #23 passed in GitHub Actions with PostgreSQL 16: **112 tests passed in 1.84s**, and the compile check passed. The post-merge main-branch CI run #41 for commit `daf72688581fb3f56b8ab6b004d82fac09b51f7a` subsequently completed successfully, including PostgreSQL service initialization, the full pytest suite, and the Python compile check.
 
 Tests are deterministic and do not call live APIs. Neon connectivity, Upstox authorization/feed, Render deployment, and Telegram delivery have not been live-tested because no credentials or account access were supplied. Do not infer production readiness from CI alone.
