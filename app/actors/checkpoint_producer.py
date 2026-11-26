@@ -6,6 +6,7 @@ persists only diagnostic actor observations, never trading or signal state.
 import asyncio
 from datetime import datetime
 from time import monotonic
+import math
 
 from sqlalchemy import func, select
 
@@ -33,7 +34,7 @@ def _validate_snapshot(snapshot):
         raise ValueError("last_timestamp must include a timezone")
     if isinstance(price, bool) or not isinstance(price, (int, float)):
         raise ValueError("last_price must be numeric")
-    if not __import__("math").isfinite(float(price)) or float(price) <= 0:
+    if not math.isfinite(float(price)) or float(price) <= 0:
         raise ValueError("last_price must be finite and positive")
     if type(processed) is not int or processed < 0:
         raise ValueError("processed must be a non-negative integer")
@@ -108,7 +109,11 @@ class ShadowCheckpointProducer:
             return False
 
         now = monotonic()
-        if not force and now - self._last_submitted.get(key, 0.0) < self.min_interval_seconds:
+        if (
+            not force
+            and key in self._last_submitted
+            and now - self._last_submitted[key] < self.min_interval_seconds
+        ):
             self.throttled += 1
             return False
 
@@ -156,8 +161,17 @@ class ShadowCheckpointProducer:
     async def _persist_with_retry(self, key, payload, occurred_at):
         version = self._versions.get(key)
         if version is None:
-            version = await asyncio.to_thread(self._load_version, key)
-            self._versions[key] = version
+            for attempt in range(self.max_attempts):
+                try:
+                    version = await asyncio.to_thread(self._load_version, key)
+                    self._versions[key] = version
+                    break
+                except Exception as exc:
+                    self.last_error = type(exc).__name__
+                    if attempt + 1 >= self.max_attempts:
+                        self.failed += 1
+                        return
+                    await asyncio.sleep(self.retry_delay_seconds * (attempt + 1))
         next_version = version + 1
         for attempt in range(self.max_attempts):
             try:
@@ -182,7 +196,12 @@ class ShadowCheckpointProducer:
                 item = self._pending.pop(key, None)
                 if item is not None:
                     payload, occurred_at = item
-                    await self._persist_with_retry(key, payload, occurred_at)
+                    try:
+                        await self._persist_with_retry(key, payload, occurred_at)
+                    except Exception as exc:
+                        # One failed aggregate must not kill the shared worker.
+                        self.failed += 1
+                        self.last_error = type(exc).__name__
             finally:
                 self.queue.task_done()
 
