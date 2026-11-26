@@ -185,6 +185,9 @@ class ShadowCheckpointProducer:
             except Exception as exc:
                 self.last_error = type(exc).__name__
                 if attempt + 1 >= self.max_attempts:
+                    # A failed commit may have an uncertain outcome. Force a
+                    # fresh max-version read before the next checkpoint.
+                    self._versions.pop(key, None)
                     self.failed += 1
                     return
                 await asyncio.sleep(self.retry_delay_seconds * (attempt + 1))
