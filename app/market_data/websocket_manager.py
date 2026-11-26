@@ -3,9 +3,10 @@ import websockets
 log=logging.getLogger(__name__)
 class WebsocketManager:
     """Upstox V3 protobuf websocket with batched subscriptions and reconnect restoration."""
-    def __init__(self,client,keys,decoder,on_tick,mode='full',stale_seconds=90,batch_size=500):
+    def __init__(self,client,keys,decoder,on_tick,mode='full',stale_seconds=90,batch_size=500,on_connect=None):
         self.client=client; self.keys=list(dict.fromkeys(keys)); self.decoder=decoder; self.on_tick=on_tick
         self.mode=mode; self.stale_seconds=stale_seconds; self.batch_size=batch_size; self.last_seen={}; self.running=False; self.connected=False
+        self.on_connect=on_connect
     async def _subscribe(self,ws):
         for i in range(0,len(self.keys),self.batch_size):
             msg={'guid':str(uuid.uuid4()),'method':'sub','data':{'mode':self.mode,'instrumentKeys':self.keys[i:i+self.batch_size]}}
@@ -18,7 +19,12 @@ class WebsocketManager:
                 url=data.get('authorized_redirect_uri') or data.get('authorizedRedirectUri')
                 if not url: raise RuntimeError('Upstox authorize response missing authorized redirect URI')
                 async with websockets.connect(url,ping_interval=20,ping_timeout=20,max_size=8_000_000,open_timeout=20) as ws:
-                    self.connected=True; await self._subscribe(ws); delay=1
+                    self.connected=True
+                    # Repair gaps before subscribing, so live ticks cannot race the
+                    # historical merge and strategy evaluation never sees partial context.
+                    if self.on_connect is not None:
+                        await self.on_connect()
+                    await self._subscribe(ws); delay=1
                     async for payload in ws:
                         if isinstance(payload,str):
                             log.warning('Ignoring unexpected text frame from V3 feed'); continue

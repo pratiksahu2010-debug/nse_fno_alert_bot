@@ -8,6 +8,7 @@ from .market_data.websocket_manager import WebsocketManager
 from .market_data.protobuf_decoder import decode_market_data
 from .market_data.candle_builder import CandleBuilder
 from .market_data.models import Candle
+from .market_data.gap_repair import parse_upstox_candles
 from .market_data.universe import Universe
 from .strategies.orb_gap import ORBGapStrategy
 from .strategies.momentum_explosion import MomentumExplosionStrategy
@@ -28,6 +29,7 @@ class LiveRuntime:
         self.settings=settings; self.engine=engine; self.Session=sessionmaker(bind=engine,expire_on_commit=False)
         self.universe=Universe(universe_path or settings.universe_path); self.universe.validate(); self.client=None; self.ws=None; self.tasks=[]; self.running=False
         self.one=CandleBuilder(1); self.five=CandleBuilder(5); self.one_hist={}; self.hist={}; self.day_refs={}; self.open_ranges={}; self.orb_done=set()
+        self._repair_lock=asyncio.Lock(); self.repair_blocked_keys=set()
         self.orb=ORBGapStrategy(settings.orb_range_minutes,settings.orb_entry_cutoff,settings.gap_min_pct)
         self.momentum=MomentumExplosionStrategy(settings.ema_fast,settings.ema_slow,settings.atr_period,settings.structure_lookback,settings.relative_volume_threshold,settings.atr_expansion_threshold,settings.momentum_entry_cutoff,settings.momentum_cooldown_minutes)
         self.coordinator=SignalCoordinator()
@@ -38,7 +40,7 @@ class LiveRuntime:
         self.client=UpstoxClient(self.settings.upstox_access_token)
         self.running=True
         self.shadow_actors.start()
-        self.ws=WebsocketManager(self.client,[x['instrument_key'] for x in self.universe.instruments],decode_market_data,self.on_tick,stale_seconds=self.settings.websocket_stale_seconds)
+        self.ws=WebsocketManager(self.client,[x['instrument_key'] for x in self.universe.instruments],decode_market_data,self.on_tick,stale_seconds=self.settings.websocket_stale_seconds,on_connect=self._repair_after_reconnect)
         await self._warmup()
         self._restore_module_state()
         self.tasks=[asyncio.create_task(self.ws.run(),name='upstox-v3-feed'),asyncio.create_task(DeliveryWorker(self.Session,self.settings).run(),name='telegram-outbox')]
@@ -52,7 +54,63 @@ class LiveRuntime:
         shadow_summary=self.shadow_actors.snapshot(); shadow_summary.pop('actors',None)
         log.info('Shadow actor summary: %s',shadow_summary)
         if self.client: await self.client.close()
+    async def _repair_after_reconnect(self):
+        """Backfill completed session candles before the feed resumes live subscriptions.
+
+        Historical bars rebuild indicator context but are deliberately not replayed
+        through strategy evaluation, preventing stale retroactive Telegram alerts.
+        A symbol whose repair request or payload validation fails remains blocked
+        from signal processing until a later reconnect repairs it successfully.
+        """
+        from zoneinfo import ZoneInfo
+        if not self.universe.instruments:
+            return
+        async with self._repair_lock:
+            semaphore=asyncio.Semaphore(4)
+            repaired=0
+            failed=[]
+            async def repair(inst):
+                nonlocal repaired
+                key=inst['instrument_key']
+                try:
+                    async with semaphore:
+                        five_response=await self.client.intraday_candles(key,'minutes',5)
+                        five_rows=five_response.get('data',{}).get('candles',[])
+                        five=parse_upstox_candles(key,five_rows,5,timezone_name=self.settings.timezone)
+                        one=[]
+                        if self.one_hist.get(key):
+                            one_response=await self.client.intraday_candles(key,'minutes',1)
+                            one_rows=one_response.get('data',{}).get('candles',[])
+                            one=parse_upstox_candles(key,one_rows,1,timezone_name=self.settings.timezone)
+                    # Merge only candles newer than the last completed candle already
+                    # retained. The websocket is not subscribed until this finishes.
+                    last_five=self.hist.get(key,[])[-1].start if self.hist.get(key) else None
+                    fresh_five=[c for c in five if last_five is None or c.start>last_five]
+                    if fresh_five:
+                        target=self.hist.setdefault(key,[])
+                        target.extend(fresh_five)
+                        if len(target)>1200: del target[:-1200]
+                    last_one=self.one_hist.get(key,[])[-1].start if self.one_hist.get(key) else None
+                    fresh_one=[c for c in one if last_one is None or c.start>last_one]
+                    if fresh_one:
+                        target=self.one_hist.setdefault(key,[])
+                        target.extend(fresh_one)
+                        if len(target)>1200: del target[:-1200]
+                    self.repair_blocked_keys.discard(key)
+                    repaired+=1
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    self.repair_blocked_keys.add(key)
+                    failed.append(key)
+                    log.warning('Candle gap repair failed for %s; signals remain blocked: %s',key,exc)
+            await asyncio.gather(*(repair(inst) for inst in self.universe.instruments))
+            log.info('Reconnect candle repair complete: repaired=%d/%d blocked=%d',repaired,len(self.universe.instruments),len(failed))
+
     async def on_tick(self,tick):
+        # Never evaluate or alert on an instrument whose reconnect gap is unresolved.
+        if tick.instrument_key in self.repair_blocked_keys:
+            return
         # Non-blocking, bounded shadow fan-out. Signal processing below is unchanged.
         self.shadow_actors.submit(tick)
         self.one.add(tick); self.five.add(tick)
@@ -113,7 +171,11 @@ class LiveRuntime:
         log.info('Historical warmup complete: %d/%d instruments have 5m bars',sum(bool(self.hist.get(x['instrument_key'])) for x in self.universe.instruments),len(self.universe.instruments))
     def _remember(self,c,minutes):
         target=self.one_hist if minutes==1 else self.hist
-        df=target.setdefault(c.instrument_key,[]); df.append(c)
+        df=target.setdefault(c.instrument_key,[])
+        # Historical repair can close bars that the live builder was still holding
+        # when the socket dropped. Ignore those delayed duplicates after backfill.
+        if df and c.start<=df[-1].start: return
+        df.append(c)
         # Retain bounded rolling history.
         if len(df)>1200: del df[:-1200]
     async def _on_five(self,c):
