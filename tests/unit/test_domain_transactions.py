@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.database.connection import Base
 from app.database.domain_outbox import DomainOutboxConflict
 from app.database.models import AggregateProjectionRow, DomainEventRow, DomainOutboxRow
+from app.database.projections import ProjectionConflict
 from app.database.transactions import append_event_with_projection_and_outbox
 
 
@@ -72,7 +73,7 @@ def test_projection_conflict_does_not_commit_prior_event(session):
     write(session)
     session.commit()
 
-    with pytest.raises(Exception):
+    with pytest.raises(ProjectionConflict):
         append_event_with_projection_and_outbox(
             session,
             aggregate_type="signal",
