@@ -9,8 +9,18 @@ def readiness_snapshot(engine, runtime, initializing=False, startup_error=None):
         pass
 
     universe_count = 0
+    universe_version = None
+    universe_valid = False
+    universe_error = None
     if runtime is not None and getattr(runtime, "universe", None) is not None:
-        universe_count = len(runtime.universe.instruments)
+        universe = runtime.universe
+        universe_count = len(getattr(universe, "instruments", []))
+        universe_version = getattr(universe, "version", None)
+        try:
+            universe.validate()
+            universe_valid = True
+        except Exception as exc:
+            universe_error = str(exc)
 
     feed_connected = bool(
         runtime is not None
@@ -23,7 +33,7 @@ def readiness_snapshot(engine, runtime, initializing=False, startup_error=None):
         "database": database,
         "runtime": runtime_running,
         "initialization_complete": not initializing and startup_error is None,
-        "universe_loaded": universe_count > 0,
+        "universe_valid": universe_valid,
         "feed_connected": feed_connected,
     }
     reasons = [name for name, passed in checks.items() if not passed]
@@ -34,6 +44,8 @@ def readiness_snapshot(engine, runtime, initializing=False, startup_error=None):
         "not_ready_reasons": reasons,
         "initializing": bool(initializing),
         "startup_error": startup_error,
+        "universe_error": universe_error,
+        "universe_version": universe_version,
         "universe_instruments": universe_count,
         "alert_only": True,
         "order_placement_enabled": False,
