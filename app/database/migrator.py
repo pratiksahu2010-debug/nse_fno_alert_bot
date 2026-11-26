@@ -64,7 +64,7 @@ def discover_migrations(directory: str | Path | None = None) -> list[Migration]:
 
 def split_sql_statements(sql: str) -> list[str]:
     """Split the project's simple DDL scripts; procedural SQL blocks are unsupported."""
-    return [part.strip() for part in sql.split(";") if part.strip()]
+    # Strip full-line SQL comments before splitting. A semicolon inside a\n    # comment must never split a statement and expose the comment tail as SQL.\n    without_line_comments = re.sub(r"(?m)^\\s*--.*$", "", sql)\n    return [part.strip() for part in without_line_comments.split(";") if part.strip()]
 
 
 def apply_migrations(engine, directory: str | Path | None = None) -> dict:
