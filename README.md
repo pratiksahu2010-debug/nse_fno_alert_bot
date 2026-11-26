@@ -11,7 +11,7 @@ Both modules are independent. Coordinator preserves same-direction confluence an
 
 ## Safety and execution model
 
-The bot monitors underlying instruments. Entry, SL, TP1 and TP2 are underlying price levels, not option premiums. A signal is rejected when a valid structural stop cannot be calculated. Targets default to 1R and 2R. Telegram delivery uses a persistent outbox. No broker order endpoint is called anywhere in the project.
+The bot monitors underlying instruments. Entry, SL, TP1 and TP2 are underlying price levels, not option premiums. A signal is rejected when a valid structural stop cannot be calculated. Targets default to 1R and 2R. Telegram delivery uses a persistent outbox. No broker order endpoint is called anywhere in the project. The service is signal-only: it never places, modifies, or cancels orders.
 
 ## Installation
 
@@ -24,23 +24,27 @@ cp .env.example .env
 
 Set `UPSTOX_ACCESS_TOKEN` (Upstox Analytics Token), Telegram credentials and `DATABASE_URL` (Neon PostgreSQL with SSL). For local isolated tests SQLite can be used, but Render deployment requires Neon.
 
-## Upstox market data
+## Upstox market data and reconnect recovery
 
-The project uses the documented V3 authorize endpoint and a strict V3 Protobuf wire decoder. `app/market_data/protobuf_decoder.py` follows the official `MarketDataFeedV3.proto` field numbers for LTPC and full-feed packets, and ignores `market_info` packets. The WebSocket manager reconnects with exponential backoff, restores subscriptions in batches, and tracks per-instrument freshness. V3 subscription capacity is subject to the Upstox account's published limits; `/health` reports stale instruments separately from socket status. Startup warmup fetches recent 5-minute history and prior daily close; when started after the open it attempts to recover the actual 09:15 open from the current-day 1-minute API.
+The project uses the documented V3 authorize endpoint and a strict V3 Protobuf wire decoder. `app/market_data/protobuf_decoder.py` follows the official `MarketDataFeedV3.proto` field numbers for LTPC and full-feed packets, and ignores `market_info` packets. The WebSocket manager reconnects with exponential backoff, restores subscriptions in batches, and tracks per-instrument freshness. V3 subscription capacity is subject to the Upstox account's published limits.
+
+Before each WebSocket connection is authorized and subscriptions are restored, the runtime now performs bounded historical repair for completed 5-minute candles and, when 1-minute microstructure history is already retained, 1-minute candles. It validates timestamps, alignment, session boundaries, OHLCV and duplicates; merges by candle timestamp; and blocks a symbol from signal processing if repair fails. Repaired historical bars rebuild indicator history but are not replayed into strategies, so reconnect repair does not create retroactive alerts. This behavior is covered by automated regression tests, but still requires verification against the user's authorized live Upstox account.
 
 Historical candle APIs are V3 (`minutes/1`, etc.). Upstox V3 minute history has request-window limits; backfill callers must chunk requests rather than ask for an unlimited range.
 
-## Frozen universe bootstrap
+## F&O eligible symbols and instrument mapping
 
-Run once manually with a valid token:
+`config/fno_eligible_symbols.txt` currently contains 218 individual-security symbols. Its checked-in header records that it was assembled from user-provided NSE `fo_mktlots.csv` and `qtyfreeze.csv` files dated 2026-11-23. This is a reviewed input list, not independent proof that every symbol remains eligible for a later trading date. Before a release, cross-check it against the official NSE F&O eligible-underlying list for the intended trading date. Do not infer eligibility from the Upstox instrument master alone.
+
+At application startup, the bot downloads the Upstox NSE BOD instrument master using `UPSTOX_ACCESS_TOKEN` and maps the reviewed 218 symbols to their NSE_EQ instrument keys, plus NIFTY and BANKNIFTY index keys. Startup fails closed if the token is missing, any reviewed symbol cannot be resolved, or the resulting universe fails strict validation. The validated snapshot is written to `UNIVERSE_PATH` (default `config/nse_fno_universe.json`). The Upstox BOD file is an instrument catalogue, not the source of F&O eligibility; the reviewed symbol file remains the eligibility filter.
+
+You can run the same bootstrap explicitly to inspect the generated mapping before committing a reviewed snapshot:
 
 ```bash
 python scripts/bootstrap_universe.py
 ```
 
-The script downloads the NSE BOD instrument master and writes `config/nse_fno_universe.json`. Review the output before committing/deploying. A production eligible F&O cash-stock list should be validated against NSE's current F&O underlying list; the Upstox BOD master is an instrument catalogue, not by itself a definitive F&O eligibility flag. The bot deliberately does not silently refresh the snapshot. To update, run the command manually, inspect the diff, then deploy the reviewed snapshot.
-
-**Important**: The current checked-in universe file is intentionally empty. Do not deploy expecting live signals until a verified frozen universe snapshot is generated and reviewed. NIFTY/BANKNIFTY key names must be checked against the actual master output.
+The runtime validator requires exactly 218 unique NSE_EQ stocks plus the two required NSE_INDEX records, with unique instrument keys and consistent snapshot metadata. The checked-in `config/nse_fno_universe.json` is currently an index-only bootstrap placeholder; it is not a valid production universe and must not be used as evidence of successful stock mapping. The runtime must regenerate and validate the complete mapping before starting.
 
 ## Database and deployment
 
@@ -51,8 +55,10 @@ Render settings:
 * Build: `pip install -r requirements.txt`
 * Start: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 * Health: `/health`
+* Readiness: `/ready`
+* Liveness: `/live`
 
-Set all variables from `.env.example` in Render. `GET /health` distinguishes DB, runtime, feed and stale-instrument health. `/ping` is keepalive only and never sends a Telegram message.
+Set all variables from `.env.example` in Render. `/ready` returns HTTP 503 until the database, runtime, full validated universe, and feed are ready. `/health` reports database, runtime, feed and stale-instrument details. `/ping` is keepalive only and never sends a Telegram message.
 
 ## Backtesting
 
@@ -60,14 +66,16 @@ Set all variables from `.env.example` in Render. `GET /health` distinguishes DB,
 
 ## Known limitations / production gate
 
-* The Upstox official instrument master is a catalogue, not the authority for the current F&O eligible underlying set. Bootstrap therefore requires a separately reviewed current NSE F&O symbol list. The checked-in `config/fno_eligible_symbols.txt` is intentionally blank and `config/nse_fno_universe.json` is intentionally empty; populate/review these before deployment.
-* Initial historical warmup and persisted trade lifecycle state are implemented, but automatic missing-candle backfill after a mid-session WebSocket reconnect is not yet implemented. Per-instrument staleness is exposed in `/health`; stale symbols should be treated as unavailable until repaired.
-* The included V3 Protobuf decoder is covered by a synthetic schema fixture, not a capture from your live Upstox account. Validate it against an authorized account feed before enabling production alerts.
+* The 218-symbol eligibility file is based on user-provided NSE files dated 2026-11-23 and must be checked against the official current NSE eligible-underlying list for the intended trading date.
+* The checked-in instrument mapping is only an index placeholder. A valid Upstox Analytics Token and a successful BOD mapping run are required to generate the complete 218-stock + 2-index universe. This has not been live-verified in this repository session.
+* The V3 Protobuf decoder and reconnect repair have synthetic/regression test coverage, not a sanitized packet capture from the user's authorized live Upstox account. Validate LTPC, full-feed, exchange timestamps, subscriptions and repair against that account before enabling production alerts.
+* CI uses ephemeral PostgreSQL 16. An isolated Neon staging database migration/restore rehearsal has not been performed.
+* No Render staging deployment, paper-market soak, or Telegram live-delivery validation has been performed in this work. No Render service, secret, environment variable, deployment or restart was changed.
 * Telegram API at-least-once delivery cannot mathematically guarantee exactly-once semantics across a process crash after Telegram accepts a message but before the DB records success. The outbox prevents duplicate concurrent leases and retries bounded failures.
 * The included backtester supports both modules, chronological completed 5-minute bars, slippage, brokerage/other flat costs, conservative stop/target ambiguity, TP1/breakeven and trailing logic. Taxes/exchange charges are supplied as a configurable flat cost input rather than calculated from the latest statutory schedule; add the applicable contract-note charges for reliable net P&L.
 * No strategy can guarantee win rate or profitability. Paper trade and validate out-of-sample before relying on alerts.
 
-See [Post-merge release gates](docs/architecture/POST_MERGE_RELEASE_GATES_2026-11-26.md) for the current production blockers and the exact staging-only acceptance checklist.
+See [Post-merge release gates](docs/architecture/POST_MERGE_RELEASE_GATES_2026-11-26.md) for current status and the staging-only acceptance checklist.
 
 ## Tests and verified build
 
@@ -76,6 +84,6 @@ pytest -q
 python -m compileall -q app scripts tests
 ```
 
-The legacy-schema PostgreSQL integration test added in PR #23 passed in GitHub Actions with PostgreSQL 16: **112 tests passed in 1.84s**, and the compile check passed. The post-merge main-branch CI run #41 for commit `daf72688581fb3f56b8ab6b004d82fac09b51f7a` subsequently completed successfully, including PostgreSQL service initialization, the full pytest suite, and the Python compile check.
+PR #25 merged the automatic reconnect candle-gap repair. Its PR CI passed 128 tests, Python compile checks and PostgreSQL 16 service initialization. The post-merge main-branch CI run #48 for commit `35abfeab75c42b40bb58588655292572bacbac12` also completed successfully: all test and compile steps passed.
 
-Tests are deterministic and do not call live APIs. Neon connectivity, Upstox authorization/feed, Render deployment, and Telegram delivery have not been live-tested because no credentials or account access were supplied. Do not infer production readiness from CI alone.
+Tests are deterministic and do not call live APIs. Neon connectivity, Upstox authorization/feed, Render deployment, and Telegram delivery have not been live-tested because no credentials or staging account access were supplied. Do not infer production readiness from CI alone.
