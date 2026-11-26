@@ -54,10 +54,19 @@ def append_event(
     }
     if any(not isinstance(value, str) or not value.strip() for value in required.values()):
         raise ValueError("aggregate type/id, event type and idempotency key are required")
-    if aggregate_version < 1 or schema_version < 1:
-        raise ValueError("aggregate_version and schema_version must be positive integers")
+    if type(aggregate_version) is not int or aggregate_version < 1:
+        raise ValueError("aggregate_version must be a positive integer")
+    if type(schema_version) is not int or schema_version < 1:
+        raise ValueError("schema_version must be a positive integer")
     if not isinstance(payload, dict):
         raise TypeError("event payload must be a dictionary")
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError("source is required")
+    for name, value in (("correlation_id", correlation_id), ("causation_id", causation_id)):
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError(f"{name} must be a non-empty string when supplied")
+    if occurred_at is not None and not isinstance(occurred_at, datetime):
+        raise TypeError("occurred_at must be a datetime when supplied")
 
     row = DomainEventRow(
         aggregate_type=aggregate_type,
