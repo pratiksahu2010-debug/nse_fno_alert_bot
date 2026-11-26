@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from datetime import datetime, timezone
 
 from app.actors.shadow_runtime import ShadowActorRegistry
@@ -58,5 +59,23 @@ def test_shadow_actor_stops_accepting_ticks_after_shutdown():
         assert registry.submit(make_tick("X")) is True
         await registry.stop()
         assert registry.submit(make_tick("X", 2, 102)) is False
+
+    asyncio.run(scenario())
+
+
+def test_malformed_shadow_tick_does_not_kill_actor_or_block_shutdown():
+    async def scenario():
+        registry = ShadowActorRegistry(mailbox_size=4, max_symbols=1)
+        registry.start()
+
+        assert registry.submit(SimpleNamespace(instrument_key="X")) is True
+        assert registry.submit(make_tick("X", 1, 101)) is True
+        await registry.stop()
+
+        snapshot = registry.snapshot()
+        assert snapshot["processed"] == 1
+        assert snapshot["failed"] == 1
+        assert snapshot["last_error"] == "AttributeError"
+        assert snapshot["queue_depth"] == 0
 
     asyncio.run(scenario())
