@@ -87,7 +87,7 @@ def test_restart_restores_latest_momentum_timestamp_and_signal_ids():
     Base.metadata.create_all(engine)
     now = datetime.now(ZoneInfo("Asia/Kolkata"))
     today = now.date()
-    first = datetime.combine(today, datetime.min.time(), tzinfo=ZoneInfo("Asia/Kolkata")).replace(hour=10)
+    first = datetime.combine(today, datetime.min.time(), tzinfo=ZoneInfo("Asia/Kolkata")).replace(hour=10).astimezone(timezone.utc)
     latest = first.replace(minute=35)
     with Session(engine) as session:
         for sid, stamp in (("older", first), ("newer", latest)):
