@@ -59,7 +59,16 @@ def test_invalid_price_or_missing_exchange_timestamp_is_rejected():
     assert decode_dhan_full_packet(packet(traded_at=0), mapping) is None
 
 
-def test_negative_cumulative_volume_is_rejected():
-    # The wire field is unsigned, so a negative value cannot be represented;
-    # a malformed non-finite LTP is still rejected before creating a Tick.
-    assert decode_dhan_full_packet(packet(price=float("nan")), {(1, "1333"): "NSE_EQ|HDFCBANK"}) is None
+def test_invalid_declared_packet_length_is_rejected():
+    with pytest.raises(ValueError, match="message length"):
+        decode_dhan_full_packet(
+            packet(length=100),
+            {(1, "1333"): "NSE_EQ|HDFCBANK"},
+        )
+
+
+def test_non_finite_price_is_rejected():
+    assert decode_dhan_full_packet(
+        packet(price=float("nan")),
+        {(1, "1333"): "NSE_EQ|HDFCBANK"},
+    ) is None
