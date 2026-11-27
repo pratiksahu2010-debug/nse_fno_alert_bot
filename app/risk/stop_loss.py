@@ -5,7 +5,7 @@ def structural_stop(signal, atr_value, buffer=0.2):
     """Return a validated underlying structural stop, or None when unsafe."""
     try:
         entry = float(signal.entry)
-        a = float(atr_value if atr_value is not None else signal.metadata.get("atr") or 0)
+        a = float(atr_value or signal.metadata.get("atr") or 0)
         buffer = float(buffer)
     except (TypeError, ValueError, OverflowError):
         return None

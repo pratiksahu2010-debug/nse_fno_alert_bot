@@ -21,6 +21,8 @@ def calculate_levels(entry, sl, direction, tp1_r=1.0, tp2_r=2.0):
         tp2 = entry - risk * tp2_r
     else:
         raise ValueError("direction must be CALL or PUT")
+    if not all(isfinite(value) for value in (tp1, tp2)) or tp1 <= 0 or tp2 <= 0:
+        raise ValueError("calculated targets must be finite and positive")
     if direction == "CALL" and not sl < entry < tp1 < tp2:
         raise ValueError("invalid CALL level ordering")
     if direction == "PUT" and not sl > entry > tp1 > tp2:
