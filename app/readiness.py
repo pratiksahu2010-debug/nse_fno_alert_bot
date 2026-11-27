@@ -22,11 +22,10 @@ def readiness_snapshot(engine, runtime, initializing=False, startup_error=None):
         except Exception as exc:
             universe_error = str(exc)
 
-    feed_connected = bool(
-        runtime is not None
-        and getattr(runtime, "ws", None) is not None
-        and runtime.ws.connected
-    )
+    ws = getattr(runtime, "ws", None) if runtime is not None else None
+    feed_connected = bool(ws is not None and ws.connected)
+    feed_fresh = bool(feed_connected and ws.feed_fresh())
+    tick_age = ws.tick_age_seconds() if ws is not None else None
     runtime_running = bool(runtime is not None and runtime.running)
 
     checks = {
@@ -35,6 +34,7 @@ def readiness_snapshot(engine, runtime, initializing=False, startup_error=None):
         "initialization_complete": not initializing and startup_error is None,
         "universe_valid": universe_valid,
         "feed_connected": feed_connected,
+        "feed_fresh": feed_fresh,
     }
     reasons = [name for name, passed in checks.items() if not passed]
 
@@ -47,6 +47,9 @@ def readiness_snapshot(engine, runtime, initializing=False, startup_error=None):
         "universe_error": universe_error,
         "universe_version": universe_version,
         "universe_instruments": universe_count,
+        "feed_tick_age_seconds": tick_age,
+        "feed_stale_seconds": ws.stale_seconds if ws is not None else None,
+        "feed_received_ticks": ws.received_ticks if ws is not None else 0,
         "alert_only": True,
         "order_placement_enabled": False,
     }

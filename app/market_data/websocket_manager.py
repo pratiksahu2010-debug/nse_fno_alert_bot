@@ -6,6 +6,7 @@ class WebsocketManager:
     def __init__(self,client,keys,decoder,on_tick,mode='full',stale_seconds=90,batch_size=500,before_connect=None):
         self.client=client; self.keys=list(dict.fromkeys(keys)); self.decoder=decoder; self.on_tick=on_tick
         self.mode=mode; self.stale_seconds=stale_seconds; self.batch_size=batch_size; self.last_seen={}; self.running=False; self.connected=False
+        self.last_packet_at=None; self.last_tick_at=None; self.received_ticks=0
         self.before_connect=before_connect
     async def _subscribe(self,ws):
         for i in range(0,len(self.keys),self.batch_size):
@@ -23,17 +24,30 @@ class WebsocketManager:
                 url=data.get('authorized_redirect_uri') or data.get('authorizedRedirectUri')
                 if not url: raise RuntimeError('Upstox authorize response missing authorized redirect URI')
                 async with websockets.connect(url,ping_interval=20,ping_timeout=20,max_size=8_000_000,open_timeout=20) as ws:
+                    # A reconnect must earn freshness again; never let a tick from
+                    # the previous socket make a newly connected but silent socket ready.
+                    self.last_packet_at=None; self.last_tick_at=None
                     self.connected=True
                     await self._subscribe(ws); delay=1
                     async for payload in ws:
                         if isinstance(payload,str):
                             log.warning('Ignoring unexpected text frame from V3 feed'); continue
+                        self.last_packet_at=time.time()
                         for tick in self.decoder(payload):
-                            self.last_seen[tick.instrument_key]=time.time(); await self.on_tick(tick)
+                            self.last_seen[tick.instrument_key]=time.time()
+                            self.last_tick_at=self.last_seen[tick.instrument_key]
+                            self.received_ticks+=1
+                            await self.on_tick(tick)
             except asyncio.CancelledError: raise
             except Exception: log.exception('Upstox V3 stream disconnected')
             finally: self.connected=False
             if self.running: await asyncio.sleep(delay+random.random()); delay=min(delay*2,60)
     def stop(self): self.running=False
+    def tick_age_seconds(self,now=None):
+        if self.last_tick_at is None: return None
+        return max(0.0,(time.time() if now is None else now)-self.last_tick_at)
+    def feed_fresh(self,now=None):
+        age=self.tick_age_seconds(now)
+        return bool(self.connected and age is not None and age <= self.stale_seconds)
     def stale_keys(self):
         now=time.time(); return [k for k in self.keys if now-self.last_seen.get(k,0)>self.stale_seconds]
