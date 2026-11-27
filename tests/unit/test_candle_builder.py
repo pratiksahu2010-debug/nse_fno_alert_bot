@@ -32,3 +32,38 @@ def test_closed_candle_cache_is_bounded_and_old_bars_cannot_reopen():
     builder.add(Tick("X", start, 999, last_qty=1))
     assert builder.current == {}
     assert builder.flush_before(start + timedelta(minutes=4)) == []
+
+
+
+def test_repeated_upstox_ltpc_trade_is_counted_once_per_open_candle():
+    builder = CandleBuilder(5)
+    start = datetime(2026, 1, 1, 4, 0, tzinfo=timezone.utc)
+    repeated = Tick("X", start + timedelta(seconds=1), 100, last_qty=7)
+    builder.add(repeated)
+    builder.add(repeated)
+    builder.add(Tick("X", start + timedelta(seconds=2), 100, last_qty=7))
+    out = builder.flush_before(start + timedelta(minutes=5))
+    assert len(out) == 1
+    assert out[0].volume == 14
+
+
+def test_invalid_or_naive_ticks_are_rejected_without_corrupting_candle():
+    builder = CandleBuilder(1)
+    start = datetime(2026, 1, 1, 4, 0, tzinfo=timezone.utc)
+    builder.add(Tick("X", start, float("nan"), last_qty=5))
+    builder.add(Tick("X", start, float("inf"), last_qty=5))
+    builder.add(Tick("X", start.replace(tzinfo=None), 100, last_qty=5))
+    builder.add(Tick("X", start, 100, last_qty=float("nan")))
+    builder.add(Tick("X", start + timedelta(seconds=1), 101, last_qty=2))
+    out = builder.flush_before(start + timedelta(minutes=1))
+    assert len(out) == 1
+    assert (out[0].open, out[0].high, out[0].low, out[0].close, out[0].volume) == (101, 101, 101, 101, 2)
+
+
+def test_dedup_state_is_released_when_bar_closes():
+    builder = CandleBuilder(1)
+    start = datetime(2026, 1, 1, 4, 0, tzinfo=timezone.utc)
+    builder.add(Tick("X", start, 100, last_qty=1))
+    assert len(builder.seen) == 1
+    builder.flush_before(start + timedelta(minutes=1))
+    assert builder.seen == {}

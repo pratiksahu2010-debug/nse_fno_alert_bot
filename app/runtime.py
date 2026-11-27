@@ -174,6 +174,56 @@ class LiveRuntime:
         df.append(c)
         # Retain bounded rolling history.
         if len(df)>1200: del df[:-1200]
+    def _evaluate_orb(self,c,symbol,now):
+        """Evaluate every completed post-range candle until a valid ORB signal or cutoff.
+
+        This matches the backtest's scan-forward behavior. A non-breakout candle
+        must not consume the day's ORB opportunity.
+        """
+        from datetime import timedelta
+        from zoneinfo import ZoneInfo
+
+        local=now.astimezone(ZoneInfo(self.settings.timezone))
+        day=local.date()
+        start=local.replace(hour=9,minute=15,second=0,microsecond=0)
+        range_end=start+timedelta(minutes=self.settings.orb_range_minutes)
+        day_key=(c.instrument_key,day)
+
+        if c.start>=start and c.end<=range_end:
+            state=self.open_ranges.setdefault(
+                day_key,{"high":c.high,"low":c.low,"count":0}
+            )
+            state["high"]=max(state["high"],c.high)
+            state["low"]=min(state["low"],c.low)
+            state["count"]+=1
+            return None
+
+        if c.end<=range_end or day_key in self.orb_done:
+            return None
+
+        # Stop scanning after the strategy's local entry cutoff.
+        if local.time().replace(tzinfo=None)>self.orb.cutoff:
+            self.orb_done.add(day_key)
+            return None
+
+        state=self.open_ranges.get(day_key)
+        expected=self.settings.orb_range_minutes//5
+        refs=self.day_refs.get(c.instrument_key,{})
+        if not state or state["count"]<expected:
+            return None
+        if not refs.get("open") or not refs.get("previous_close"):
+            return None
+
+        signal=self.orb.evaluate(
+            symbol,refs["open"],refs["previous_close"],
+            state["high"],state["low"],c,now
+        )
+        # Mark complete only after a real candidate is produced. A failed
+        # first post-range candle leaves later completed candles eligible.
+        if signal:
+            self.orb_done.add(day_key)
+        return signal
+
     async def _on_five(self,c):
         existing=self.hist.get(c.instrument_key,[])
         if existing and c.start<=existing[-1].start:
@@ -182,28 +232,14 @@ class LiveRuntime:
         rows=self.hist[c.instrument_key]
         await self._manage_trades(c, rows)
         if len(rows)<25:return
-        df=pd.DataFrame([{'open':x.open,'high':x.high,'low':x.low,'close':x.close,'volume':x.volume} for x in rows],index=pd.DatetimeIndex(pd.to_datetime([x.start for x in rows],utc=True)))
-        inst=next((x for x in self.universe.instruments if x['instrument_key']==c.instrument_key),None)
+        df=pd.DataFrame([{"open":x.open,"high":x.high,"low":x.low,"close":x.close,"volume":x.volume} for x in rows],index=pd.DatetimeIndex(pd.to_datetime([x.start for x in rows],utc=True)))
+        inst=next((x for x in self.universe.instruments if x["instrument_key"]==c.instrument_key),None)
         if not inst:return
-        symbol=inst['symbol']; now=c.end
-        # Previous close and regular open are initialized from historical/live session data;
-        # without validated refs the ORB strategy deliberately stays silent.
-        refs=self.day_refs.get(c.instrument_key,{})
+        symbol=inst["symbol"]; now=c.end
         sig=self.momentum.evaluate(symbol,df)
-        if sig: await self._persist_signal(sig, c)
-        # Opening range built strictly from completed regular-session 5m candles.
-        local=now.astimezone(__import__('zoneinfo').ZoneInfo(self.settings.timezone))
-        day=local.date(); start=local.replace(hour=9,minute=15,second=0,microsecond=0)
-        range_end=start+__import__('datetime').timedelta(minutes=self.settings.orb_range_minutes)
-        if c.start>=start and c.end<=range_end:
-            state=self.open_ranges.setdefault((c.instrument_key,day),{'high':c.high,'low':c.low,'count':0})
-            state['high']=max(state['high'],c.high); state['low']=min(state['low'],c.low); state['count']+=1
-        elif c.end>range_end and (c.instrument_key,day) not in self.orb_done:
-            state=self.open_ranges.get((c.instrument_key,day)); expected=self.settings.orb_range_minutes//5
-            if state and state['count']>=expected and refs.get('open') and refs.get('previous_close'):
-                orb=self.orb.evaluate(symbol,refs['open'],refs['previous_close'],state['high'],state['low'],c,now)
-                self.orb_done.add((c.instrument_key,day))
-                if orb: await self._persist_signal(orb,c)
+        if sig: await self._persist_signal(sig,c)
+        orb=self._evaluate_orb(c,symbol,now)
+        if orb: await self._persist_signal(orb,c)
     async def _manage_trades(self,c,rows):
         """Advance persisted trade lifecycle from completed underlying 5m bars."""
         import json
