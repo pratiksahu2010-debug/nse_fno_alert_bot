@@ -37,7 +37,9 @@ def test_live_orb_keeps_scanning_after_first_post_range_candle_has_no_breakout()
     assert signal is not None
     assert signal.direction == "CALL"
     assert signal.timestamp == second.end
-    assert (key, day) in runtime.orb_done
+    # Candidate creation alone must not consume the day's opportunity.
+    assert (key, day) not in runtime.orb_done
+    runtime.orb_done.add((key, day))  # simulate successful durable persistence
     assert runtime._evaluate_orb(second, "TEST", second.end) is None
 
 
@@ -82,3 +84,4 @@ def test_live_orb_and_backtest_emit_same_later_breakout():
     assert live is not None
     assert live.direction == backtest.iloc[0]["direction"]
     assert live.timestamp == backtest.iloc[0]["timestamp"]
+    assert (key, day) not in runtime.orb_done

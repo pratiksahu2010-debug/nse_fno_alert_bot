@@ -127,12 +127,24 @@ class LiveRuntime:
         with self.Session() as s:
             rows=s.scalars(select(SignalRow).where(SignalRow.timestamp>=datetime.combine(today,datetime.min.time(),tzinfo=ZoneInfo(self.settings.timezone)).astimezone(timezone.utc))).all()
             key_by_symbol={x['symbol']:x['instrument_key'] for x in self.universe.instruments}
+            latest_momentum = {}
             for row in rows:
-                sig=Signal(row.signal_id,row.symbol,row.module,row.direction,row.setup,row.timestamp,row.entry,{},row.relation)
+                stamp = row.timestamp
+                # SQLite may return naive values for timezone-aware columns;
+                # persisted signal timestamps are normalized to UTC.
+                if stamp.tzinfo is None:
+                    stamp = stamp.replace(tzinfo=timezone.utc)
+                sig=Signal(row.signal_id,row.symbol,row.module,row.direction,row.setup,stamp,row.entry,{},row.relation)
                 self.coordinator.ids.add(row.signal_id)
-                self.coordinator.by_symbol_day.setdefault((row.symbol,row.timestamp.date()),[]).append(sig)
-                if row.module=='MOMENTUM_EXPLOSION': self.momentum.last_signal[row.symbol]=row.timestamp
+                self.coordinator.by_symbol_day.setdefault((row.symbol,stamp.date()),[]).append(sig)
+                if row.module=='MOMENTUM_EXPLOSION':
+                    prior = latest_momentum.get(row.symbol)
+                    if prior is None or stamp > prior:
+                        latest_momentum[row.symbol] = stamp
                 if row.module=='ORB_GAP' and row.symbol in key_by_symbol: self.orb_done.add((key_by_symbol[row.symbol],today))
+            # Query order is not guaranteed: restore the newest persisted signal
+            # per symbol so cooldown checks never compare against an older row.
+            self.momentum.last_signal.update(latest_momentum)
     async def _warmup(self):
         """Warm 5m indicators and prior close before accepting live entries."""
         from datetime import date,timedelta
@@ -225,8 +237,8 @@ class LiveRuntime:
         )
         # Mark complete only after a real candidate is produced. A failed
         # first post-range candle leaves later completed candles eligible.
-        if signal:
-            self.orb_done.add(day_key)
+        # Candidate generation is not durable acceptance. The runtime marks
+        # this day complete only after signal + outbox persistence succeeds.
         return signal
 
     async def _on_five(self,c):
@@ -270,9 +282,25 @@ class LiveRuntime:
         sl=structural_stop(sig,atr,self.settings.sl_atr_buffer)
         if sl is None: log.info('Rejected %s: structural stop unavailable',sig.signal_id); return
         levels=calculate_levels(sig.entry,sl,sig.direction,self.settings.target_1_r,self.settings.target_2_r)
-        accepted=self.coordinator.accept(sig)
-        if accepted is None:return
+        # Do not advance process-local deduplication/cooldown until the
+        # signal, risk levels, trade state and alert outbox commit atomically.
+        if sig.signal_id in self.coordinator.ids:
+            return False
+        self.coordinator.classify(sig)
         body=format_signal(sig,levels)
         with self.Session() as s:
             repo=SignalRepository(s)
-            repo.save_with_alert(sig,body,levels,{'state':'ENTRY_ACTIVE','entry':sig.entry,**levels,'original_sl':sl,'tp1_hit':False,'trail_sl':sl})
+            saved=repo.save_with_alert(
+                sig,body,levels,
+                {'state':'ENTRY_ACTIVE','entry':sig.entry,**levels,'original_sl':sl,'tp1_hit':False,'trail_sl':sl}
+            )
+        if not saved:
+            return False
+        self.coordinator.accept(sig)
+        if sig.module == 'MOMENTUM_EXPLOSION':
+            self.momentum.last_signal[sig.symbol] = sig.timestamp
+        if sig.module == 'ORB_GAP':
+            key = next((x['instrument_key'] for x in self.universe.instruments if x['symbol'] == sig.symbol), None)
+            if key:
+                self.orb_done.add((key, sig.timestamp.astimezone(__import__('zoneinfo').ZoneInfo(self.settings.timezone)).date()))
+        return True
