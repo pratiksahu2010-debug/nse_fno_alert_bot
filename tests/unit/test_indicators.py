@@ -45,3 +45,18 @@ def test_session_vwap_resets_on_local_trading_date():
     assert result.iloc[1] < 103
     assert result.iloc[2] == 200
     assert result.iloc[3] > 200
+
+
+def test_relative_volume_does_not_carry_previous_session_volume_into_open():
+    from app.strategies.indicators import relative_volume
+
+    first_day = pd.date_range("2026-01-01 09:15", periods=6, freq="5min", tz="Asia/Kolkata")
+    second_day = pd.date_range("2026-01-02 09:15", periods=6, freq="5min", tz="Asia/Kolkata")
+    index = first_day.append(second_day)
+    frame = pd.DataFrame({"volume": [1000.0] * 6 + [100.0] * 6}, index=index)
+
+    result = relative_volume(frame, period=5)
+    # The first candle of the new session has no prior same-session baseline;
+    # after five prior bars, its baseline is today's 100-volume activity.
+    assert np.isnan(result.iloc[6])
+    assert result.iloc[11] == 1.0
