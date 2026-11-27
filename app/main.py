@@ -87,16 +87,21 @@ async def health():
         db = True
     except Exception:
         pass
-    feed = bool(runtime and runtime.ws and runtime.ws.connected)
-    stale = runtime.ws.stale_keys() if runtime and runtime.ws else []
-    ready = bool(db and runtime is not None and feed)
+    ws = runtime.ws if runtime else None
+    feed = bool(ws and ws.connected)
+    feed_fresh = bool(ws and ws.feed_fresh())
+    stale = ws.stale_keys() if ws else []
+    ready = bool(db and runtime is not None and runtime.running and feed_fresh)
     return {
         "ok": ready,
         "database": db,
-        "runtime": runtime is not None,
+        "runtime": bool(runtime is not None and runtime.running),
         "initializing": initializing,
         "startup_error": startup_error,
         "feed_connected": feed,
+        "feed_fresh": feed_fresh,
+        "feed_tick_age_seconds": ws.tick_age_seconds() if ws else None,
+        "feed_received_ticks": ws.received_ticks if ws else 0,
         "stale_instruments": len(stale),
         "universe_version": runtime.universe.version if runtime else None,
         "universe_instruments": len(runtime.universe.instruments) if runtime else 0,
