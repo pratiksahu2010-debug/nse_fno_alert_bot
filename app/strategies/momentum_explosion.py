@@ -91,7 +91,7 @@ class MomentumExplosionStrategy:
         if score < self.min_score:
             return None
         previous = self.last_signal.get(symbol)
-        if previous and (stamp - previous).total_seconds() < self.cooldown * 60:
+        if previous and (candle_end - previous).total_seconds() < self.cooldown * 60:
             return None
 
         # 15m context is derived only from three fully completed 5m bars.
@@ -106,7 +106,8 @@ class MomentumExplosionStrategy:
             if mtf_fast is not None and mtf_slow is not None:
                 mtf_aligned = mtf_fast > mtf_slow if direction == "CALL" else mtf_fast < mtf_slow
         regime = classify_market_regime(current_adx, fast_ema, slow_ema, current_atr)
-        self.last_signal[symbol] = stamp
+        # Cooldown is committed by the runtime only after the signal and
+        # alert outbox have been persisted successfully.
         return Signal.create(
             symbol, self.name, direction, "MOMENTUM_EXPANSION", candle_end, close,
             metadata={

@@ -237,8 +237,8 @@ class LiveRuntime:
         )
         # Mark complete only after a real candidate is produced. A failed
         # first post-range candle leaves later completed candles eligible.
-        if signal:
-            self.orb_done.add(day_key)
+        # Candidate generation is not durable acceptance. The runtime marks
+        # this day complete only after signal + outbox persistence succeeds.
         return signal
 
     async def _on_five(self,c):

@@ -117,3 +117,13 @@ def test_opposing_15m_context_never_vetoes_or_reduces_5m_signal(monkeypatch):
     assert opposing.direction == "CALL"
     assert opposing.metadata["mtf_15m_aligned"] is False
     assert opposing.metadata["signal_score"] == baseline.metadata["signal_score"]
+
+
+def test_evaluate_does_not_consume_cooldown_before_persistence(monkeypatch):
+    frame = make_breakout_frame()
+    patch_all_indicators(monkeypatch, frame)
+    strategy = MomentumExplosionStrategy()
+    signal = strategy.evaluate("ABC", frame)
+    assert signal is not None
+    assert strategy.last_signal == {}
+    assert signal.timestamp == frame.index[-1].to_pydatetime() + pd.Timedelta(minutes=5)
