@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -38,12 +39,13 @@ def test_signal_and_alert_outbox_commit_before_memory_deduplication():
     runtime = _runtime(engine)
     candle = SimpleNamespace(high=101.0, low=99.0)
 
-    assert LiveRuntime._persist_signal(runtime, _signal(), candle) is True
+    signal = _signal(datetime.now(timezone.utc))
+    assert asyncio.run(LiveRuntime._persist_signal(runtime, signal, candle)) is True
     assert len(runtime.coordinator.ids) == 1
     assert "NSE:TEST" in runtime.momentum.last_signal
 
     # Repeated delivery of the same completed-candle signal is suppressed.
-    assert LiveRuntime._persist_signal(runtime, _signal(), candle) is False
+    assert asyncio.run(LiveRuntime._persist_signal(runtime, signal, candle)) is False
     with Session(engine) as session:
         assert session.scalar(select(func.count()).select_from(SignalRow)) == 1
         assert session.scalar(select(func.count()).select_from(OutboxRow)) == 1
@@ -67,7 +69,7 @@ def test_failed_persistence_does_not_advance_memory_cooldown_or_dedupe(monkeypat
     runtime.Session = lambda: _NullSession()
     signal = _signal()
 
-    assert LiveRuntime._persist_signal(runtime, signal, SimpleNamespace(high=101.0, low=99.0)) is False
+    assert asyncio.run(LiveRuntime._persist_signal(runtime, signal, SimpleNamespace(high=101.0, low=99.0))) is False
     assert runtime.coordinator.ids == set()
     assert runtime.coordinator.by_symbol_day == {}
     assert runtime.momentum.last_signal == {}
