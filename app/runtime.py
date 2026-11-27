@@ -34,6 +34,7 @@ class LiveRuntime:
         self.orb=ORBGapStrategy(settings.orb_range_minutes,settings.orb_entry_cutoff,settings.gap_min_pct)
         self.momentum=MomentumExplosionStrategy(settings.ema_fast,settings.ema_slow,settings.atr_period,settings.structure_lookback,settings.relative_volume_threshold,settings.atr_expansion_threshold,settings.momentum_entry_cutoff,settings.momentum_cooldown_minutes,settings.adx_min,settings.momentum_min_score)
         self.coordinator=SignalCoordinator()
+        # Best-effort shadow observers; never authoritative for signals or alerts.
         self.shadow_actors=ShadowActorRegistry(mailbox_size=256,max_symbols=max(1,len(self.universe.instruments)))
     async def start(self):
         if not self.settings.upstox_access_token: raise RuntimeError('UPSTOX_ACCESS_TOKEN missing')
@@ -55,6 +56,13 @@ class LiveRuntime:
         log.info('Shadow actor summary: %s',shadow_summary)
         if self.client: await self.client.close()
     async def _repair_after_reconnect(self, now=None):
+        """Backfill completed session candles before the feed resumes live subscriptions.
+
+        Historical bars rebuild indicator context but are deliberately not replayed
+        through strategy evaluation, preventing stale retroactive Telegram alerts.
+        A symbol whose repair request or payload validation fails remains blocked
+        from signal processing until a later reconnect repairs it successfully.
+        """
         now=now or datetime.now(timezone.utc)
         if not self.universe.instruments:
             return
@@ -79,6 +87,9 @@ class LiveRuntime:
                             if not isinstance(one_data,dict) or not isinstance(one_data.get('candles'),list):
                                 raise ValueError('Upstox 1m intraday response is missing data.candles')
                             one=parse_upstox_candles(key,one_data['candles'],1,now=now,timezone_name=self.settings.timezone)
+                    # Merge by candle timestamp, not only after the newest bar: this
+                    # repairs holes inside the retained session as well as the tail.
+                    # Exchange history replaces partial live bars for matching times.
                     self.hist[key]=merge_candle_history(self.hist.get(key,[]),five)
                     if one or self.one_hist.get(key):
                         self.one_hist[key]=merge_candle_history(self.one_hist.get(key,[]),one)
@@ -87,20 +98,28 @@ class LiveRuntime:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    self.repair_blocked_keys.add(key); failed.append(key)
+                    self.repair_blocked_keys.add(key)
+                    failed.append(key)
                     log.warning('Candle gap repair failed for %s; signals remain blocked: %s',key,exc)
             await asyncio.gather(*(repair(inst) for inst in self.universe.instruments))
             log.info('Reconnect candle repair complete: repaired=%d/%d blocked=%d',repaired,len(self.universe.instruments),len(failed))
+
     async def on_tick(self,tick):
-        if tick.instrument_key in self.repair_blocked_keys:return
-        self.shadow_actors.submit(tick); self.one.add(tick); self.five.add(tick); now=tick.timestamp
+        # Never evaluate or alert on an instrument whose reconnect gap is unresolved.
+        if tick.instrument_key in self.repair_blocked_keys:
+            return
+        # Non-blocking, bounded shadow fan-out. Signal processing below is unchanged.
+        self.shadow_actors.submit(tick)
+        self.one.add(tick); self.five.add(tick)
+        now=tick.timestamp
         local=now.astimezone(__import__('zoneinfo').ZoneInfo(self.settings.timezone))
         if local.hour==9 and local.minute>=15 and local.minute<30:
             refs=self.day_refs.setdefault(tick.instrument_key,{})
-            if 'open' not in refs and local.date()==datetime.now(__import__('zoneinfo').ZoneInfo(self.settings.timezone)).date():refs['open']=tick.price
-        for c in self.one.flush_before(now):self._remember(c,1)
-        for c in self.five.flush_before(now):await self._on_five(c)
+            if 'open' not in refs and local.date()==datetime.now(__import__('zoneinfo').ZoneInfo(self.settings.timezone)).date(): refs['open']=tick.price
+        for c in self.one.flush_before(now): self._remember(c,1)
+        for c in self.five.flush_before(now): await self._on_five(c)
     def _restore_module_state(self):
+        """Restore today's deduplication and Momentum cooldown state after Render restart."""
         from datetime import datetime,timezone
         from sqlalchemy import select
         from zoneinfo import ZoneInfo
@@ -110,10 +129,12 @@ class LiveRuntime:
             key_by_symbol={x['symbol']:x['instrument_key'] for x in self.universe.instruments}
             for row in rows:
                 sig=Signal(row.signal_id,row.symbol,row.module,row.direction,row.setup,row.timestamp,row.entry,{},row.relation)
-                self.coordinator.ids.add(row.signal_id); self.coordinator.by_symbol_day.setdefault((row.symbol,row.timestamp.date()),[]).append(sig)
-                if row.module=='MOMENTUM_EXPLOSION':self.momentum.last_signal[row.symbol]=row.timestamp
-                if row.module=='ORB_GAP' and row.symbol in key_by_symbol:self.orb_done.add((key_by_symbol[row.symbol],today))
+                self.coordinator.ids.add(row.signal_id)
+                self.coordinator.by_symbol_day.setdefault((row.symbol,row.timestamp.date()),[]).append(sig)
+                if row.module=='MOMENTUM_EXPLOSION': self.momentum.last_signal[row.symbol]=row.timestamp
+                if row.module=='ORB_GAP' and row.symbol in key_by_symbol: self.orb_done.add((key_by_symbol[row.symbol],today))
     async def _warmup(self):
+        """Warm 5m indicators and prior close before accepting live entries."""
         from datetime import date,timedelta
         from zoneinfo import ZoneInfo
         from .market_data.models import Candle
@@ -123,60 +144,109 @@ class LiveRuntime:
                 key=inst['instrument_key']
                 try:
                     hist=await self.client.historical_candles(key,'minutes',5,end.isoformat(),start.isoformat())
-                    candles=hist.get('data',{}).get('candles',[]); parsed=[]
+                    candles=hist.get('data',{}).get('candles',[])
+                    parsed=[]
                     for row in reversed(candles):
                         ts=datetime.fromisoformat(row[0]); parsed.append(Candle(key,ts,ts+__import__('datetime').timedelta(minutes=5),float(row[1]),float(row[2]),float(row[3]),float(row[4]),float(row[5]),'historical'))
                     self.hist[key]=parsed[-500:]
-                    if parsed:self.day_refs[key]={'previous_close':float(parsed[-1].close)}
+                    # The final completed 5m candle in the historical response is the
+                    # prior session close; avoid a separate daily endpoint call per symbol.
+                    if parsed:
+                        self.day_refs[key]={'previous_close':float(parsed[-1].close)}
+                    # Fetch the true 09:15 regular-session open only while the market is
+                    # open. Outside market hours ORB remains safely disabled until next day.
                     current=datetime.now(ZoneInfo(self.settings.timezone))
-                    if __import__('datetime').time(9,15)<=current.time()<=__import__('datetime').time(15,30):
+                    if __import__('datetime').time(9,15) <= current.time() <= __import__('datetime').time(15,30):
                         intra=await self.client.intraday_candles(key,'minutes',1)
-                        for bar in sorted(intra.get('data',{}).get('candles',[]),key=lambda x:x[0]):
+                        today_rows=intra.get('data',{}).get('candles',[])
+                        for bar in sorted(today_rows,key=lambda x:x[0]):
                             stamp=datetime.fromisoformat(bar[0]).astimezone(ZoneInfo(self.settings.timezone))
-                            if stamp.date()==today and stamp.time().hour==9 and stamp.time().minute==15:self.day_refs.setdefault(key,{})['open']=float(bar[1]);break
-                except Exception as exc:log.warning('Warmup failed for %s: %s',key,exc)
+                            if stamp.date()==today and stamp.time().hour==9 and stamp.time().minute==15:
+                                self.day_refs.setdefault(key,{})['open']=float(bar[1]); break
+                except Exception as exc: log.warning('Warmup failed for %s: %s',key,exc)
         await asyncio.gather(*(load(x) for x in self.universe.instruments))
         log.info('Historical warmup complete: %d/%d instruments have 5m bars',sum(bool(self.hist.get(x['instrument_key'])) for x in self.universe.instruments),len(self.universe.instruments))
     def _remember(self,c,minutes):
-        target=self.one_hist if minutes==1 else self.hist; df=target.setdefault(c.instrument_key,[])
-        if df and c.start<=df[-1].start:return
+        target=self.one_hist if minutes==1 else self.hist
+        df=target.setdefault(c.instrument_key,[])
+        # Historical repair can close bars that the live builder was still holding
+        # when the socket dropped. Ignore those delayed duplicates after backfill.
+        if df and c.start<=df[-1].start: return
         df.append(c)
-        if len(df)>1200:del df[:-1200]
+        # Retain bounded rolling history.
+        if len(df)>1200: del df[:-1200]
     def _evaluate_orb(self,c,symbol,now,df=None):
+        """Evaluate every completed post-range candle until a valid ORB signal or cutoff.
+
+        This matches the backtest's scan-forward behavior. A non-breakout candle
+        must not consume the day's ORB opportunity.
+        """
         from datetime import timedelta
         from zoneinfo import ZoneInfo
-        local=now.astimezone(ZoneInfo(self.settings.timezone)); day=local.date()
-        start=local.replace(hour=9,minute=15,second=0,microsecond=0); range_end=start+timedelta(minutes=self.settings.orb_range_minutes)
+
+        local=now.astimezone(ZoneInfo(self.settings.timezone))
+        day=local.date()
+        start=local.replace(hour=9,minute=15,second=0,microsecond=0)
+        range_end=start+timedelta(minutes=self.settings.orb_range_minutes)
         day_key=(c.instrument_key,day)
+
         if c.start>=start and c.end<=range_end:
-            state=self.open_ranges.setdefault(day_key,{"high":c.high,"low":c.low,"count":0})
-            state["high"]=max(state["high"],c.high);state["low"]=min(state["low"],c.low);state["count"]+=1;return None
-        if c.end<=range_end or day_key in self.orb_done:return None
-        if local.time().replace(tzinfo=None)>self.orb.cutoff:self.orb_done.add(day_key);return None
-        state=self.open_ranges.get(day_key);expected=self.settings.orb_range_minutes//5;refs=self.day_refs.get(c.instrument_key,{})
-        if not state or state["count"]<expected:return None
-        if not refs.get("open") or not refs.get("previous_close"):return None
+            state=self.open_ranges.setdefault(
+                day_key,{"high":c.high,"low":c.low,"count":0}
+            )
+            state["high"]=max(state["high"],c.high)
+            state["low"]=min(state["low"],c.low)
+            state["count"]+=1
+            return None
+
+        if c.end<=range_end or day_key in self.orb_done:
+            return None
+
+        # Stop scanning after the strategy's local entry cutoff.
+        if local.time().replace(tzinfo=None)>self.orb.cutoff:
+            self.orb_done.add(day_key)
+            return None
+
+        state=self.open_ranges.get(day_key)
+        expected=self.settings.orb_range_minutes//5
+        refs=self.day_refs.get(c.instrument_key,{})
+        if not state or state["count"]<expected:
+            return None
+        if not refs.get("open") or not refs.get("previous_close"):
+            return None
+
         vwap = float(session_vwap(df).iloc[-1]) if df is not None and len(df) else None
         rvol = float(relative_volume(df).iloc[-1]) if df is not None and len(df) else None
-        if vwap is not None and not pd.notna(vwap):vwap=None
-        if rvol is not None and not pd.notna(rvol):rvol=None
-        signal=self.orb.evaluate(symbol,refs["open"],refs["previous_close"],state["high"],state["low"],c,now,vwap=vwap,rvol=rvol)
-        if signal:self.orb_done.add(day_key)
+        if vwap is not None and not pd.notna(vwap): vwap = None
+        if rvol is not None and not pd.notna(rvol): rvol = None
+        signal=self.orb.evaluate(
+            symbol,refs["open"],refs["previous_close"],
+            state["high"],state["low"],c,now,vwap=vwap,rvol=rvol
+        )
+        # Mark complete only after a real candidate is produced. A failed
+        # first post-range candle leaves later completed candles eligible.
+        if signal:
+            self.orb_done.add(day_key)
         return signal
+
     async def _on_five(self,c):
         existing=self.hist.get(c.instrument_key,[])
-        if existing and c.start<=existing[-1].start:return
-        self._remember(c,5);rows=self.hist[c.instrument_key];await self._manage_trades(c,rows)
+        if existing and c.start<=existing[-1].start:
+            return
+        self._remember(c,5)
+        rows=self.hist[c.instrument_key]
+        await self._manage_trades(c, rows)
         if len(rows)<25:return
         df=pd.DataFrame([{"open":x.open,"high":x.high,"low":x.low,"close":x.close,"volume":x.volume} for x in rows],index=pd.DatetimeIndex(pd.to_datetime([x.start for x in rows],utc=True)))
         inst=next((x for x in self.universe.instruments if x["instrument_key"]==c.instrument_key),None)
         if not inst:return
-        symbol=inst["symbol"];now=c.end
+        symbol=inst["symbol"]; now=c.end
         sig=self.momentum.evaluate(symbol,df)
-        if sig:await self._persist_signal(sig,c)
+        if sig: await self._persist_signal(sig,c)
         orb=self._evaluate_orb(c,symbol,now,df=df)
-        if orb:await self._persist_signal(orb,c)
+        if orb: await self._persist_signal(orb,c)
     async def _manage_trades(self,c,rows):
+        """Advance persisted trade lifecycle from completed underlying 5m bars."""
         import json
         from sqlalchemy import select
         from .risk.trade_manager import TradeState
@@ -185,21 +255,24 @@ class LiveRuntime:
             records=s.execute(select(TradeRow,SignalRow).join(SignalRow,TradeRow.signal_id==SignalRow.signal_id).where(SignalRow.symbol==next((x['symbol'] for x in self.universe.instruments if x['instrument_key']==c.instrument_key),''))).all()
             for trade,signal in records:
                 data=json.loads(trade.state_json)
-                if data.get('state') in {'CLOSED','INVALIDATED','EXPIRED'}:continue
+                if data.get('state') in {'CLOSED','INVALIDATED','EXPIRED'}: continue
                 state=TradeState(status=data.get('state','ENTRY_ACTIVE'),tp1_hit=bool(data.get('tp1_hit')),stop=float(data.get('trail_sl',data.get('original_sl'))),entry=float(data['entry']),direction=signal.direction,original_stop=float(data['original_sl']))
-                swing=min(x.low for x in prior) if prior and signal.direction=='CALL' else max(x.high for x in prior) if prior else None
+                swing=None
+                if prior: swing=min(x.low for x in prior) if signal.direction=='CALL' else max(x.high for x in prior)
                 events=state.on_candle(c.high,c.low,float(data['tp1']),float(data['tp2']),swing)
-                if not events and state.status==data.get('state') and state.stop==float(data.get('trail_sl',data.get('original_sl'))):continue
+                if not events and state.status==data.get('state') and state.stop==float(data.get('trail_sl',data.get('original_sl'))): continue
                 data.update({'state':state.status,'tp1_hit':state.tp1_hit,'trail_sl':state.stop})
                 trade.state_json=json.dumps(data)
-                for event in events:s.add(SignalEventRow(signal_id=trade.signal_id,event=event,payload_json=json.dumps({'stop':state.stop,'candle_end':c.end.isoformat()})))
+                for event in events: s.add(SignalEventRow(signal_id=trade.signal_id,event=event,payload_json=json.dumps({'stop':state.stop,'candle_end':c.end.isoformat()})))
             s.commit()
     async def _persist_signal(self,sig,candle):
-        atr=float(sig.metadata.get('atr') or max(candle.high-candle.low,0));sl=structural_stop(sig,atr,self.settings.sl_atr_buffer)
-        if sl is None:log.info('Rejected %s: structural stop unavailable',sig.signal_id);return
+        atr=float(sig.metadata.get('atr') or max(candle.high-candle.low,0))
+        sl=structural_stop(sig,atr,self.settings.sl_atr_buffer)
+        if sl is None: log.info('Rejected %s: structural stop unavailable',sig.signal_id); return
         levels=calculate_levels(sig.entry,sl,sig.direction,self.settings.target_1_r,self.settings.target_2_r)
         accepted=self.coordinator.accept(sig)
         if accepted is None:return
         body=format_signal(sig,levels)
         with self.Session() as s:
-            repo=SignalRepository(s);repo.save_with_alert(sig,body,levels,{'state':'ENTRY_ACTIVE','entry':sig.entry,**levels,'original_sl':sl,'tp1_hit':False,'trail_sl':sl})
+            repo=SignalRepository(s)
+            repo.save_with_alert(sig,body,levels,{'state':'ENTRY_ACTIVE','entry':sig.entry,**levels,'original_sl':sl,'tp1_hit':False,'trail_sl':sl})
