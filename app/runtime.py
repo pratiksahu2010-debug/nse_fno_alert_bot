@@ -31,7 +31,7 @@ class LiveRuntime:
         self.one=CandleBuilder(1); self.five=CandleBuilder(5); self.one_hist={}; self.hist={}; self.day_refs={}; self.open_ranges={}; self.orb_done=set()
         self._repair_lock=asyncio.Lock(); self.repair_blocked_keys=set()
         self.orb=ORBGapStrategy(settings.orb_range_minutes,settings.orb_entry_cutoff,settings.gap_min_pct)
-        self.momentum=MomentumExplosionStrategy(settings.ema_fast,settings.ema_slow,settings.atr_period,settings.structure_lookback,settings.relative_volume_threshold,settings.atr_expansion_threshold,settings.momentum_entry_cutoff,settings.momentum_cooldown_minutes)
+        self.momentum=MomentumExplosionStrategy(settings.ema_fast,settings.ema_slow,settings.atr_period,settings.structure_lookback,settings.relative_volume_threshold,settings.atr_expansion_threshold,settings.momentum_entry_cutoff,settings.momentum_cooldown_minutes,settings.adx_min,settings.momentum_min_score)
         self.coordinator=SignalCoordinator()
         # Best-effort shadow observers; never authoritative for signals or alerts.
         self.shadow_actors=ShadowActorRegistry(mailbox_size=256,max_symbols=max(1,len(self.universe.instruments)))

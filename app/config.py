@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     orb_range_minutes:int=Field(15,ge=5,le=15); orb_entry_cutoff:str='11:30'; momentum_entry_cutoff:str='15:00'
     momentum_cooldown_minutes:int=Field(30,ge=0); relative_volume_threshold:float=Field(1.5,gt=0)
     atr_expansion_threshold:float=Field(1.2,gt=0); structure_lookback:int=Field(10,ge=2); atr_period:int=Field(14,ge=2)
+    adx_min:float=Field(18,ge=1,le=60); momentum_min_score:int=Field(75,ge=0,le=100)
     ema_fast:int=Field(9,ge=2); ema_slow:int=Field(21,ge=3); gap_min_pct:float=Field(1.0,ge=0)
     sl_atr_buffer:float=Field(.2,ge=0); target_1_r:float=Field(1,gt=0); target_2_r:float=Field(2,gt=0)
     websocket_stale_seconds:int=90; enable_live_runtime:bool=True
