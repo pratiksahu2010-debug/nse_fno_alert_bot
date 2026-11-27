@@ -19,7 +19,24 @@ def atr(df, period=14):
 
 
 def relative_volume(df, period=20):
-    baseline = df.volume.shift(1).rolling(period, min_periods=period).mean()
+    """Compare volume with prior bars from the same local session only.
+
+    Five prior same-session bars are the minimum baseline; this avoids using
+    the previous session's closing volume to judge today's opening activity.
+    """
+    if isinstance(df.index, pd.DatetimeIndex):
+        local_index = (
+            df.index.tz_localize("Asia/Kolkata")
+            if df.index.tz is None
+            else df.index.tz_convert("Asia/Kolkata")
+        )
+        session = pd.Series(local_index.date, index=df.index)
+        min_periods = min(period, 5)
+        baseline = df.volume.groupby(session, sort=False).transform(
+            lambda values: values.shift(1).rolling(period, min_periods=min_periods).mean()
+        )
+    else:
+        baseline = df.volume.shift(1).rolling(period, min_periods=min(period, 5)).mean()
     return df.volume / baseline.where(baseline > 0)
 
 
