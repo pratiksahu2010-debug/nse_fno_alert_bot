@@ -11,8 +11,14 @@ class Outbox:
         row.status="LEASED";row.lease_owner=f"{worker}:{uuid.uuid4().hex}";row.lease_until=now+timedelta(seconds=seconds);row.attempts+=1;self.s.commit();return row
     def complete(self,row_id,worker):
         row=self.s.get(OutboxRow,row_id)
-        if row and row.status=="LEASED" and row.lease_owner==worker:row.status="SENT";row.lease_until=None;self.s.commit();return True
+        if row and row.status=="LEASED" and row.lease_owner==worker:
+            row.status="SENT";row.lease_until=None;self.s.commit();return True
         return False
     def fail(self,row_id,worker,error,max_attempts=8):
         row=self.s.get(OutboxRow,row_id)
-        if row and row.status=="LEASED" and row.lease_owner==worker:row.status="FAILED" if row.attempts>=max_attempts else "PENDING";row.last_error=str(error)[:1000];row.lease_until=None;self.s.commit()
+        if not (row and row.status=="LEASED" and row.lease_owner==worker):
+            return False
+        row.status="FAILED" if row.attempts>=max_attempts else "PENDING"
+        row.last_error=str(error)[:1000];row.lease_until=None
+        self.s.commit()
+        return True
