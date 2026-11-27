@@ -22,7 +22,9 @@ class CandleBuilder:
         self.delta = timedelta(minutes=minutes)
         self.max_closed_candles = max_closed_candles
         self.current = {}
-        # Deduplicate repeated LTPC updates only while their candle is open.\n        # Closed-bar watermarks reject late repeats after these keys are released.\n        self.seen = {}
+        # Deduplicate repeated LTPC updates only while their candle is open.
+        # Closed-bar watermarks reject late repeats after these keys are released.
+        self.seen = {}
         self.closed = OrderedDict()
         self.closed_watermark = {}
         self.last_cum = {}
@@ -109,7 +111,8 @@ class CandleBuilder:
             previous = self.closed_watermark.get(ident[0])
             if previous is None or start > previous:
                 self.closed_watermark[ident[0]] = start
-            del self.current[ident]\n            self.seen.pop(ident, None)
+            del self.current[ident]
+            self.seen.pop(ident, None)
         out.sort(key=lambda x: (x.end, x.instrument_key))
         while len(self.closed) > self.max_closed_candles:
             self.closed.popitem(last=False)
