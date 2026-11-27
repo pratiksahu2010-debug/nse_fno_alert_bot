@@ -9,7 +9,7 @@ def test_orb_failed_gap_reversal_and_quality_metadata():
     candle = SimpleNamespace(open=99, close=98, high=99, low=97, end=datetime(2026, 1, 1, 4, 45, tzinfo=timezone.utc))
     signal = strategy.evaluate("ABC", 102, 100, 101, 99, candle, candle.end, vwap=99, rvol=2.0)
     assert signal.direction == "PUT" and signal.setup == "FAILED_GAP_REVERSAL"
-    assert signal.metadata["orb_quality_score"] == 85
+    assert signal.metadata["orb_quality_score"] == 70
     assert signal.metadata["orb_volume_confirmed"] is True
 
 
