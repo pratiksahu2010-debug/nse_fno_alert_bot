@@ -115,7 +115,7 @@ class MomentumExplosionStrategy:
         score += 10 if aligned_rsi else 4
         score += 10 if aligned_macd else 0
         score += 15 if aligned_vwap else 0
-        score += 15 if current_rvol >= 2.0 else 12
+        score += 20 if current_rvol >= 2.0 else 15
         score += 5 if expansion else 0
         score += 5 if quality_candle else 0
         score = min(100, score)
