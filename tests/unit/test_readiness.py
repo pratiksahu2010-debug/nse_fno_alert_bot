@@ -36,14 +36,24 @@ class FakeUniverse:
 
 
 class FakeFeed:
-    def __init__(self, connected=True):
+    stale_seconds = 90
+    received_ticks = 1
+
+    def __init__(self, connected=True, fresh=True):
         self.connected = connected
+        self.fresh = fresh
+
+    def feed_fresh(self):
+        return self.connected and self.fresh
+
+    def tick_age_seconds(self):
+        return 0.0 if self.fresh else 120.0
 
 
 class FakeRuntime:
-    def __init__(self, connected=True, running=True, universe_valid=True):
+    def __init__(self, connected=True, running=True, universe_valid=True, feed_fresh=True):
         self.running = running
-        self.ws = FakeFeed(connected)
+        self.ws = FakeFeed(connected, feed_fresh)
         self.universe = FakeUniverse(universe_valid)
 
 
@@ -58,7 +68,9 @@ def test_readiness_passes_when_all_required_dependencies_are_ready():
         "initialization_complete": True,
         "universe_valid": True,
         "feed_connected": True,
+        "feed_fresh": True,
     }
+    assert result["feed_tick_age_seconds"] == 0.0
     assert result["alert_only"] is True
     assert result["order_placement_enabled"] is False
 
@@ -68,6 +80,16 @@ def test_readiness_fails_when_feed_is_disconnected():
 
     assert result["ready"] is False
     assert "feed_connected" in result["not_ready_reasons"]
+    assert "feed_fresh" in result["not_ready_reasons"]
+
+
+def test_readiness_fails_when_connected_feed_is_stale():
+    result = readiness_snapshot(FakeEngine(), FakeRuntime(feed_fresh=False))
+
+    assert result["ready"] is False
+    assert "feed_connected" not in result["not_ready_reasons"]
+    assert "feed_fresh" in result["not_ready_reasons"]
+    assert result["feed_tick_age_seconds"] == 120.0
 
 
 def test_readiness_fails_during_initialization_or_after_startup_error():
