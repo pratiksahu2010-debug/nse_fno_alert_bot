@@ -63,7 +63,7 @@ class BacktestEngine:
             prev_close=float(prevday.iloc[-1].close); day_open=float(daydf.iloc[0].open)
             n=self.orb.range_minutes//5; opening=daydf.iloc[:n]; hi=float(opening.high.max()); lo=float(opening.low.min())
             for j in range(n,len(daydf)):
-                sig=self.orb.evaluate(symbol,day_open,prev_close,hi,lo, type('Bar',(),{'close':float(daydf.iloc[j].close),'high':float(daydf.iloc[j].high),'low':float(daydf.iloc[j].low),'end':daydf.index[j]+timedelta(minutes=5)})(),daydf.index[j]+timedelta(minutes=5))
+                sig=self.orb.evaluate(symbol,day_open,prev_close,hi,lo, type('Bar',(),{'open':float(daydf.iloc[j].open),'close':float(daydf.iloc[j].close),'high':float(daydf.iloc[j].high),'low':float(daydf.iloc[j].low),'end':daydf.index[j]+timedelta(minutes=5)})(),daydf.index[j]+timedelta(minutes=5))
                 if sig:
                     # ORB stop buffer uses true range of the breakout bar as conservative volatility proxy.
                     sig.metadata['atr']=max(float(daydf.iloc[j].high-daydf.iloc[j].low),0.01)

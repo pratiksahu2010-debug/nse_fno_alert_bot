@@ -11,6 +11,7 @@ from .market_data.models import Candle
 from .market_data.gap_repair import merge_candle_history, parse_upstox_candles
 from .market_data.universe import Universe
 from .strategies.orb_gap import ORBGapStrategy
+from .strategies.indicators import relative_volume, session_vwap
 from .strategies.momentum_explosion import MomentumExplosionStrategy
 from .signals.coordinator import SignalCoordinator
 from .actors.shadow_runtime import ShadowActorRegistry
@@ -174,7 +175,7 @@ class LiveRuntime:
         df.append(c)
         # Retain bounded rolling history.
         if len(df)>1200: del df[:-1200]
-    def _evaluate_orb(self,c,symbol,now):
+    def _evaluate_orb(self,c,symbol,now,df=None):
         """Evaluate every completed post-range candle until a valid ORB signal or cutoff.
 
         This matches the backtest's scan-forward behavior. A non-breakout candle
@@ -214,9 +215,13 @@ class LiveRuntime:
         if not refs.get("open") or not refs.get("previous_close"):
             return None
 
+        vwap = float(session_vwap(df).iloc[-1]) if df is not None and len(df) else None
+        rvol = float(relative_volume(df).iloc[-1]) if df is not None and len(df) else None
+        if vwap is not None and not pd.notna(vwap): vwap = None
+        if rvol is not None and not pd.notna(rvol): rvol = None
         signal=self.orb.evaluate(
             symbol,refs["open"],refs["previous_close"],
-            state["high"],state["low"],c,now
+            state["high"],state["low"],c,now,vwap=vwap,rvol=rvol
         )
         # Mark complete only after a real candidate is produced. A failed
         # first post-range candle leaves later completed candles eligible.
@@ -238,7 +243,7 @@ class LiveRuntime:
         symbol=inst["symbol"]; now=c.end
         sig=self.momentum.evaluate(symbol,df)
         if sig: await self._persist_signal(sig,c)
-        orb=self._evaluate_orb(c,symbol,now)
+        orb=self._evaluate_orb(c,symbol,now,df=df)
         if orb: await self._persist_signal(orb,c)
     async def _manage_trades(self,c,rows):
         """Advance persisted trade lifecycle from completed underlying 5m bars."""

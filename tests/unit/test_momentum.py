@@ -77,3 +77,43 @@ def test_momentum_put_requires_downtrend_and_directional_confirmation(monkeypatc
     signal = MomentumExplosionStrategy().evaluate("PUT_TEST", frame)
     assert signal is not None
     assert signal.direction == "PUT"
+
+
+def test_opposing_15m_context_never_vetoes_or_reduces_5m_signal(monkeypatch):
+    frame = make_breakout_frame()
+    patch_all_indicators(monkeypatch, frame)
+
+    # Establish the 5m-only result, then supply a fully warmed-up but
+    # directionally opposing 15m series. The signal and score must be identical.
+    monkeypatch.setattr(
+        mod, "completed_15m_bars",
+        lambda data: pd.DataFrame(columns=data.columns, index=pd.DatetimeIndex([])),
+    )
+    baseline = MomentumExplosionStrategy().evaluate("BASELINE", frame)
+    assert baseline is not None
+
+    bars_15m = pd.DataFrame(
+        {
+            "open": [100.0] * 28,
+            "high": [101.0] * 28,
+            "low": [99.0] * 28,
+            "close": [100.0] * 28,
+            "volume": [100.0] * 28,
+        },
+        index=pd.date_range("2026-01-01 09:15", periods=28, freq="15min", tz="Asia/Kolkata"),
+    )
+    monkeypatch.setattr(mod, "completed_15m_bars", lambda data: bars_15m)
+    monkeypatch.setattr(
+        mod, "ema",
+        lambda values, period: pd.Series(
+            [90.0 if period == 9 else 100.0] * len(values), index=values.index
+        ) if len(values) == len(bars_15m) else pd.Series(
+            [110.0 if period == 9 else 100.0] * len(values), index=values.index
+        ),
+    )
+
+    opposing = MomentumExplosionStrategy().evaluate("OPPOSING_15M", frame)
+    assert opposing is not None
+    assert opposing.direction == "CALL"
+    assert opposing.metadata["mtf_15m_aligned"] is False
+    assert opposing.metadata["signal_score"] == baseline.metadata["signal_score"]
