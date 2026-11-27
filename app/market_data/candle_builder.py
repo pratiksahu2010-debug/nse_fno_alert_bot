@@ -22,12 +22,11 @@ class CandleBuilder:
         self.delta = timedelta(minutes=minutes)
         self.max_closed_candles = max_closed_candles
         self.current = {}
-        # Deduplicate repeated LTPC updates only while their candle is open.
-        # Closed-bar watermarks reject late repeats after these keys are released.
         self.seen = {}
         self.closed = OrderedDict()
         self.closed_watermark = {}
         self.last_cum = {}
+        self.last_cum_timestamp = {}
 
     def _floor(self, dt):
         epoch = int(dt.timestamp())
@@ -37,9 +36,10 @@ class CandleBuilder:
         )
 
     def add(self, t: Tick):
-        # Upstox LTPC carries last-traded quantity, not a cumulative candle
-        # volume. The same last trade is repeated in subsequent feed updates;
-        # count its quantity once per open candle using exchange trade identity.
+        # Upstox MarketFullFeed.vtt is the preferred daily cumulative traded
+        # volume counter. LTPC.ltq is only the last trade quantity; using LTQ
+        # as candle volume misses trades between feed updates. Use LTQ only
+        # when the selected feed mode does not expose a cumulative counter.
         if not isinstance(t.timestamp, datetime) or t.timestamp.tzinfo is None:
             return []
         try:
@@ -72,19 +72,35 @@ class CandleBuilder:
             return []
         bar_seen.add(dedup)
 
-        if last_qty is not None:
-            vol = last_qty
-        elif cumulative is not None:
-            prev = self.last_cum.get(t.instrument_key)
-            vol = max(0.0, cumulative - prev) if prev is not None and cumulative >= prev else 0.0
-            # A lower exchange cumulative counter is treated as a reset; the
-            # uncertain reset interval contributes zero rather than fake volume.
-            self.last_cum[t.instrument_key] = cumulative
+        if cumulative is not None:
+            previous = self.last_cum.get(t.instrument_key)
+            previous_at = self.last_cum_timestamp.get(t.instrument_key)
+            if previous is None:
+                volume = 0.0  # no safe baseline after startup/reconnect
+                self.last_cum[t.instrument_key] = cumulative
+                self.last_cum_timestamp[t.instrument_key] = t.timestamp
+            elif previous_at is not None and t.timestamp < previous_at:
+                # A delayed packet must not rewind the cumulative-volume
+                # baseline and inflate the next in-order delta.
+                volume = 0.0
+            elif t.timestamp.date() != previous_at.date() if previous_at else False:
+                # Daily exchange counters reset between trading sessions.
+                volume = 0.0
+                self.last_cum[t.instrument_key] = cumulative
+                self.last_cum_timestamp[t.instrument_key] = t.timestamp
+            elif cumulative >= previous:
+                volume = cumulative - previous
+                self.last_cum[t.instrument_key] = cumulative
+                self.last_cum_timestamp[t.instrument_key] = t.timestamp
+            else:
+                # Same-session counter regression is ambiguous; do not
+                # manufacture volume or move the trusted baseline backwards.
+                volume = 0.0
         else:
-            vol = 0.0
+            volume = last_qty if last_qty is not None else 0.0
 
         bucket = self.current.setdefault(ident, [])
-        bucket.append((t.timestamp, price, vol))
+        bucket.append((t.timestamp, price, volume))
         return []
 
     def flush_before(self, now):
